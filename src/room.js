@@ -5,7 +5,7 @@ const { Market, MarketError } = require('./market');
 const { drawOptions, describe, applyCard } = require('./cards');
 
 const FAST = !!process.env.DEV_FAST; // 테스트용: 짧은 시간 허용
-const MAX_PLAYERS = 8;
+const MAX_PLAYERS = 4;
 const DRAFT_MS = FAST ? 6000 : 15000;
 const MG_INTRO_MS = FAST ? 1500 : 4000;
 const MG_PLAY_MS = 20000;
@@ -49,7 +49,7 @@ class Room {
     name = String(name || '').trim();
     if (!/^[\p{L}\p{N}_\- ]{2,12}$/u.test(name)) throw new MarketError('닉네임은 2~12자의 글자/숫자만 가능합니다.');
     if (this.phase !== 'lobby') throw new MarketError('이미 게임이 진행 중인 방입니다.');
-    if (this.players.size >= MAX_PLAYERS) throw new MarketError('방이 가득 찼습니다.');
+    if (this.players.size >= MAX_PLAYERS) throw new MarketError('방이 가득 찼습니다. (최대 4명)');
     for (const p of this.players.values()) if (p.name.toLowerCase() === name.toLowerCase()) throw new MarketError('방에 같은 닉네임이 있습니다.');
     const p = { id: crypto.randomUUID(), token: crypto.randomUUID(), name, online: true };
     this.players.set(p.id, p);

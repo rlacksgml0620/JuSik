@@ -8,6 +8,10 @@ const io = { sendTo: (pid, msg) => sent.push({ pid, msg }), broadcast: (room, ms
 const room = new Room('TEST', io);
 const a = room.join('철수'), b = room.join('영희');
 assert.throws(() => room.join('철수'), /같은 닉네임/);
+// 최대 4명: 3·4번째는 입장, 5번째는 거절
+const extra = [room.join('민수'), room.join('지영')];
+assert.throws(() => room.join('다섯째'), /가득/);
+extra.forEach((p) => room.leave(p.id));
 assert.throws(() => room.start(b.id), /방장만/);
 room.configure(a.id, { rounds: 6, roundSecs: 30 });
 
