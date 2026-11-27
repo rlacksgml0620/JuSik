@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>주식 게임</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+  <script src="/vendor/lightweight-charts.js"></script>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">📈 주식 게임 <span class="online" id="online"></span></div>
+    <nav class="symbols" id="symbolTabs"></nav>
+    <div class="me" id="meBox"></div>
+  </header>
+
+  <main class="layout">
+    <section class="panel chart-panel">
+      <div class="quote-head">
+        <div>
+          <span class="q-name" id="qName"></span>
+          <span class="q-code" id="qCode"></span>
+        </div>
+        <div class="q-price" id="qPrice"></div>
+        <div class="q-stats" id="qStats"></div>
+        <div class="tf" id="tfBtns">
+          <button data-tf="5" class="on">5초</button>
+          <button data-tf="60">1분</button>
+          <button data-tf="300">5분</button>
+          <button data-tf="900">15분</button>
+        </div>
+      </div>
+      <div id="chart" class="chart"></div>
+    </section>
+
+    <section class="panel book-panel">
+      <h3>호가</h3>
+      <div class="book" id="book"></div>
+      <h3 class="sub">실시간 체결</h3>
+      <div class="tape" id="tape"></div>
+    </section>
+
+    <section class="panel order-panel">
+      <div class="side-tabs">
+        <button data-side="buy" class="buy on">매수</button>
+        <button data-side="sell" class="sell">매도</button>
+      </div>
+      <div class="type-tabs">
+        <label><input type="radio" name="otype" value="limit" checked /> 지정가</label>
+        <label><input type="radio" name="otype" value="market" /> 시장가</label>
+      </div>
+      <label class="field">가격
+        <div class="stepper">
+          <button type="button" id="pDown">−</button>
+          <input id="oPrice" inputmode="numeric" />
+          <button type="button" id="pUp">+</button>
+        </div>
+      </label>
+      <label class="field">수량
+        <div class="stepper">
+          <button type="button" id="qDown">−</button>
+          <input id="oQty" inputmode="numeric" value="1" />
+          <button type="button" id="qUp">+</button>
+        </div>
+      </label>
+      <div class="pct">
+        <button data-pct="10">10%</button><button data-pct="25">25%</button>
+        <button data-pct="50">50%</button><button data-pct="100">최대</button>
+      </div>
+      <dl class="summary">
+        <dt id="availLabel">주문가능</dt><dd id="avail">-</dd>
+        <dt>주문금액</dt><dd id="oTotal">-</dd>
+      </dl>
+      <button id="submit" class="submit buy">매수</button>
+      <div class="msg" id="orderMsg"></div>
+    </section>
+
+    <section class="panel side-panel">
+      <div class="tabs" data-group="side">
+        <button data-tab="lb" class="on">랭킹</button>
+        <button data-tab="chat">채팅</button>
+        <button data-tab="news">뉴스</button>
+      </div>
+      <div class="tab-body" data-pane="lb"><ol class="lb" id="lb"></ol></div>
+      <div class="tab-body hidden" data-pane="chat">
+        <div class="chat" id="chat"></div>
+        <form class="chat-form" id="chatForm"><input id="chatInput" maxlength="200" placeholder="메시지 입력" autocomplete="off" /><button>전송</button></form>
+      </div>
+      <div class="tab-body hidden" data-pane="news"><ul class="news" id="news"></ul></div>
+    </section>
+
+    <section class="panel bottom-panel">
+      <div class="tabs" data-group="bottom">
+        <button data-tab="pos" class="on">보유종목</button>
+        <button data-tab="open">미체결 <span id="openCount"></span></button>
+        <button data-tab="hist">체결내역</button>
+        <span class="spacer"></span>
+        <button class="ghost" id="resetBtn" title="자산을 초기 상태로 되돌립니다">계좌 초기화</button>
+      </div>
+      <div class="tab-body" data-pane="pos"><table class="grid" id="posTable"></table></div>
+      <div class="tab-body hidden" data-pane="open"><table class="grid" id="openTable"></table></div>
+      <div class="tab-body hidden" data-pane="hist"><table class="grid" id="histTable"></table></div>
+    </section>
+  </main>
+
+  <div class="news-ticker" id="ticker"></div>
+  <div class="toasts" id="toasts"></div>
+
+  <div class="overlay" id="login">
+    <form class="login-card" id="loginForm">
+      <h1>📈 주식 게임</h1>
+      <p>모든 참가자가 <b>같은 시장</b>에서 거래합니다.<br />당신의 주문이 차트를 움직입니다.</p>
+      <p class="muted">시작 자금 10,000,000원 · 수수료 0.015% · 매도세 0.18%</p>
+      <input id="nameInput" maxlength="12" placeholder="닉네임 (2~12자)" autocomplete="off" />
+      <button>입장하기</button>
+      <div class="msg" id="loginMsg"></div>
+    </form>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
