@@ -17,7 +17,7 @@
 
   const S = {
     ws: null, offset: 0, you: null, code: null, room: null,
-    symbols: [], md: {}, sym: null, tf: 5, base: [], account: null,
+    symbols: [], md: {}, sym: null, tf: 15, base: [], account: null,
     side: 'buy', otype: 'limit', tape: [], news: [], reqId: 1,
     draft: null, mg: null, mgGame: null, mgSubmitted: false, result: null,
   };
@@ -170,11 +170,13 @@
     }
     showScreen('gameScreen');
     if (r.phase !== 'draft') showOverlay('draftOverlay', false);
+    showOverlay('countOverlay', r.phase === 'countdown');
+    if (r.phase === 'countdown') renderCountdown();
     if (r.phase !== 'minigame') { showOverlay('mgOverlay', false); if (S.mgGame) { S.mgGame.end(); S.mgGame = null; } }
-    if (r.phase === 'trading' || r.phase === 'draft' || r.phase === 'minigame') showOverlay('resultOverlay', false);
+    if (r.phase === 'trading' || r.phase === 'draft' || r.phase === 'minigame' || r.phase === 'countdown') showOverlay('resultOverlay', false);
     if (r.phase === 'ended' && S.result) renderFinalButtons();
-    if (prev && prev.phase !== 'trading' && r.phase === 'trading' && r.round > 1) {
-      showTicker(`🔔 라운드 ${r.round} 개장! 기준가가 직전 종가로 바뀌었습니다.`);
+    if (prev && prev.phase !== 'trading' && r.phase === 'trading') {
+      showTicker(r.round > 1 ? `🔔 라운드 ${r.round} 개장! 기준가가 직전 종가로 바뀌었습니다.` : '🔔 장이 열렸습니다! 매수·매도를 시작하세요.');
       if (S.md[S.sym] && S.otype === 'limit') setNum($('oPrice'), S.md[S.sym].last);
     }
     if (r.phase === 'draft') renderDraftWait();
@@ -185,14 +187,32 @@
   function renderRoundInfo() {
     const r = S.room;
     if (!r) return;
-    $('roundLabel').textContent = r.phase === 'ended' ? '게임 종료' : `라운드 ${Math.max(1, r.round)} / ${r.rounds}`;
+    const shown = r.phase === 'countdown' ? r.round + 1 : Math.max(1, r.round);
+    $('roundLabel').textContent = r.phase === 'ended' ? '게임 종료' : `라운드 ${shown} / ${r.rounds}`;
     const left = r.endsAt ? mmss(r.endsAt - serverNow()) : '';
-    const label = { trading: `거래 중 ${left}`, draft: `카드 선택 ${left}`, minigame: `미니게임 ${left}`, mgresult: `미니게임 결과 ${left}`, ended: '최종 결과' }[r.phase] || '';
+    const label = { countdown: `곧 개장 ${left}`, trading: `거래 중 ${left}`, draft: `카드 선택 ${left}`, minigame: `미니게임 ${left}`, mgresult: `미니게임 결과 ${left}`, ended: '최종 결과' }[r.phase] || '';
     $('phaseLabel').textContent = label;
     $('phaseLabel').className = 'phase ' + r.phase + (r.phase === 'trading' && r.endsAt - serverNow() < 10000 ? ' hurry' : '');
     $('pausedBadge').classList.toggle('hidden', r.phase === 'trading');
+    $('pausedBadge').textContent = r.phase === 'countdown' ? '곧 개장합니다' : r.phase === 'ended' ? '게임 종료' : '장 마감 · 다음 라운드 대기';
     $('submit').disabled = r.phase !== 'trading';
     if (r.phase === 'draft') $('draftTimer').textContent = mmss(r.endsAt - serverNow());
+  }
+
+  function renderCountdown() {
+    const r = S.room;
+    if (!r || r.phase !== 'countdown') return;
+    const n = Math.max(1, Math.ceil((r.endsAt - serverNow()) / 1000));
+    const next = r.round + 1;
+    $('countTitle').textContent = next === 1 ? '게임 시작!' : `라운드 ${next} / ${r.rounds}`;
+    if ($('countNum').textContent !== String(n)) {
+      $('countNum').textContent = n;
+      $('countNum').classList.remove('pop'); void $('countNum').offsetWidth; $('countNum').classList.add('pop');
+    }
+    const mgNext = next % 3 === 0 && next < r.rounds;
+    $('countSub').textContent = next === 1
+      ? `총 ${r.rounds}라운드 · 라운드당 ${r.roundSecs}초 · 시작 자금 10,000,000원`
+      : mgNext ? '이번 라운드가 끝나면 🎮 미니게임이 열립니다' : next === r.rounds ? '🏁 마지막 라운드입니다!' : '장이 곧 열립니다';
   }
 
   function onGame(m) {
@@ -645,7 +665,7 @@
   });
   $('rerollBtn').onclick = () => send({ t: 'reroll' });
 
-  setInterval(() => { renderRoundInfo(); tickMinigame(); if (S.account && S.account.mods.scalpUntil > serverNow() - 1000) renderBuffs(); }, 200);
+  setInterval(() => { renderRoundInfo(); renderCountdown(); tickMinigame(); if (S.account && S.account.mods.scalpUntil > serverNow() - 1000) renderBuffs(); }, 200);
   showScreen(getSession() ? 'waitScreen' : 'lobbyScreen');
   connect();
 })();

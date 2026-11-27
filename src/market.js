@@ -11,10 +11,10 @@ const LIMIT = 0.3;            // 라운드(하루) 가격제한폭
 const INSIDER_LEAD = 15_000;  // 내부자 정보: 뉴스 몇 ms 전에 알려주나
 
 const SYMBOLS = [
-  { code: 'GRM', name: '구름전자', price: 72000, vol: 0.0011, sector: '반도체', game: 'chip' },
-  { code: 'BNN', name: '바나나모빌리티', price: 18500, vol: 0.0018, sector: '자동차', game: 'parking' },
-  { code: 'DKB', name: '도깨비바이오', price: 4200, vol: 0.0030, sector: '바이오', game: 'math' },
-  { code: 'DLB', name: '달빛엔터', price: 31000, vol: 0.0015, sector: '엔터', game: 'reaction' },
+  { code: 'GRM', name: '구름전자', price: 72000, vol: 0.0007, sector: '반도체', game: 'chip' },
+  { code: 'BNN', name: '바나나모빌리티', price: 18500, vol: 0.0011, sector: '자동차', game: 'parking' },
+  { code: 'DKB', name: '도깨비바이오', price: 4200, vol: 0.0018, sector: '바이오', game: 'math' },
+  { code: 'DLB', name: '달빛엔터', price: 31000, vol: 0.0009, sector: '엔터', game: 'reaction' },
 ];
 
 const NEWS_UP = [
@@ -97,6 +97,12 @@ class Market {
       });
     }
     this._scheduleNews(Date.now());
+    this.refreshQuotes();
+  }
+
+  // 봇 호가를 즉시 깔아둠 (게임 생성/라운드 개장 직후 빈 호가창 방지)
+  refreshQuotes() {
+    for (const s of this.symbols.values()) this._marketMake(s);
   }
 
   // ---------- 플레이어 ----------
@@ -437,7 +443,7 @@ class Market {
   }
 
   _noise(s) {
-    const n = Math.random() < 0.7 ? 1 + (Math.random() < 0.3 ? 1 : 0) : 0;
+    const n = Math.random() < 0.5 ? 1 + (Math.random() < 0.2 ? 1 : 0) : 0;
     for (let i = 0; i < n; i++) {
       const side = Math.random() < 0.5 ? 'buy' : 'sell';
       const qty = Math.max(1, Math.round((rand(200_000, 2_000_000) / s.last) * (Math.random() < 0.05 ? 5 : 1)));
@@ -451,9 +457,9 @@ class Market {
     const s = syms[Math.floor(Math.random() * syms.length)];
     const good = Math.random() < 0.5;
     const pool = good ? NEWS_UP : NEWS_DOWN;
-    const at = now + rand(22, 40) * 1000;
+    const at = now + rand(35, 60) * 1000;
     this.upcoming = {
-      sym: s.code, good, mag: rand(0.03, 0.12), secs: Math.round(rand(8, 25)),
+      sym: s.code, good, mag: rand(0.03, 0.09), secs: Math.round(rand(15, 30)),
       title: pool[Math.floor(Math.random() * pool.length)].replace('{n}', s.name),
       at, revealAt: at - INSIDER_LEAD, revealed: false,
     };

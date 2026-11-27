@@ -7,6 +7,7 @@ const RARITIES = [
   { key: 'legendary', name: '전설', weight: 3 },
 ];
 
+const GAME_MULT_CAP = 2.5;
 const won = (n) => Math.round(n).toLocaleString('ko-KR') + '원';
 const pctS = (n) => Math.round(n * 100) + '%';
 
@@ -84,9 +85,10 @@ const CARDS = [
     apply: (m, p, v) => { p.mods.rerolls += v; },
   },
   {
-    id: 'gamer', name: '미니게임 고수', icon: '🎮', type: '영구', v: [0.3, 0.6, 1, 2],
-    desc: (v) => `미니게임 보상이 영구적으로 +${pctS(v)} 늘어납니다.`,
-    apply: (m, p, v) => { p.mods.gameMult += v; },
+    id: 'gamer', name: '미니게임 고수', icon: '🎮', type: '영구', v: [0.25, 0.5, 0.8, 1.2],
+    // 남은 미니게임이 없거나 이미 상한이면 나오지 않음 (아래 drawOptions)
+    desc: (v, c) => `미니게임 보상 +${pctS(v)} (현재 x${c.p.mods.gameMult.toFixed(2)} → x${Math.min(GAME_MULT_CAP, c.p.mods.gameMult + v).toFixed(2)}, 최대 x${GAME_MULT_CAP}). 남은 미니게임 ${c.mgLeft ?? '?'}회.`,
+    apply: (m, p, v) => { p.mods.gameMult = Math.min(GAME_MULT_CAP, Math.round((p.mods.gameMult + v) * 100) / 100); },
   },
   {
     id: 'gamble', name: '도박꾼', icon: '🎲', type: '즉시', v: [null, [0.4, 0.25], [0.6, 0.25], [1, 0.2]], minRarity: 1,
@@ -109,13 +111,14 @@ function rollRarity(luck) {
 }
 
 // 플레이어에게 보여줄 카드 3장
-function drawOptions(market, p, n = 3) {
+function drawOptions(market, p, n = 3, info = {}) {
   const out = [];
   const used = new Set();
   const syms = [...market.symbols.values()];
   while (out.length < n) {
     const rarity = rollRarity(p.mods.luck);
-    const pool = CARDS.filter((c) => !used.has(c.id) && rarity >= (c.minRarity || 0) && !(c.id === 'nofee' && p.mods.feeFree));
+    const pool = CARDS.filter((c) => !used.has(c.id) && rarity >= (c.minRarity || 0) && !(c.id === 'nofee' && p.mods.feeFree)
+      && !(c.id === 'gamer' && (!info.mgLeft || p.mods.gameMult >= GAME_MULT_CAP)));
     if (!pool.length) break;
     const card = pool[Math.floor(Math.random() * pool.length)];
     used.add(card.id);
@@ -132,19 +135,19 @@ function ctxFor(market, p, opt, extra = {}) {
 }
 
 // 클라이언트에 보낼 카드 설명
-function describe(market, p, opt) {
+function describe(market, p, opt, info = {}) {
   const card = BY_ID[opt.id];
   const v = card.v[opt.rarity];
   return {
     id: card.id, name: card.name, icon: card.icon, type: card.type, rarity: opt.rarity,
     rarityName: RARITIES[opt.rarity].name, rarityKey: RARITIES[opt.rarity].key, sym: opt.sym || null,
-    desc: card.desc(v, ctxFor(market, p, opt)),
+    desc: card.desc(v, ctxFor(market, p, opt, info)),
   };
 }
 
 function applyCard(market, p, opt, extra) {
   const card = BY_ID[opt.id];
-  const info = describe(market, p, opt);
+  const info = describe(market, p, opt, extra);
   const msg = card.apply(market, p, card.v[opt.rarity], ctxFor(market, p, opt, extra));
   p.cards.push({ id: card.id, name: card.name, icon: card.icon, rarity: opt.rarity, rarityKey: info.rarityKey, desc: info.desc });
   market.dirty.add(p.id);

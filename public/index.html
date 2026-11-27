@@ -43,8 +43,8 @@
       <p class="muted">친구에게 방 코드나 링크를 보내세요 (최대 4명). <button class="ghost" id="copyLink">링크 복사</button></p>
       <ul class="wait-players" id="waitPlayers"></ul>
       <div class="settings" id="settingsBox">
-        <label>라운드 수 <select id="setRounds"><option>6</option><option selected>10</option><option>15</option></select></label>
-        <label>라운드 시간 <select id="setSecs"><option value="30">30초</option><option value="45" selected>45초</option><option value="60">60초</option></select></label>
+        <label>라운드 수 <select id="setRounds"><option>6</option><option selected>8</option><option>10</option></select></label>
+        <label>라운드 시간 <select id="setSecs"><option value="45">45초</option><option value="60" selected>60초</option><option value="90">90초</option></select></label>
       </div>
       <div class="lobby-actions">
         <button class="primary" id="startBtn">게임 시작</button>
@@ -72,7 +72,7 @@
           <div class="q-price" id="qPrice"></div>
           <div class="q-stats" id="qStats"></div>
           <div class="tf" id="tfBtns">
-            <button data-tf="5" class="on">5초</button><button data-tf="15">15초</button><button data-tf="60">1분</button>
+            <button data-tf="5">5초</button><button data-tf="15" class="on">15초</button><button data-tf="60">1분</button>
           </div>
         </div>
         <div class="chart-wrap"><div id="chart" class="chart"></div><div class="paused hidden" id="pausedBadge">장 마감 · 다음 라운드 대기</div></div>
@@ -120,6 +120,11 @@
       </section>
     </main>
   </section>
+
+  <!-- 시작 카운트다운 -->
+  <div class="overlay countdown hidden" id="countOverlay">
+    <div class="count-box"><div class="count-title" id="countTitle"></div><div class="count-num" id="countNum"></div><div class="count-sub" id="countSub"></div></div>
+  </div>
 
   <!-- 카드 선택 -->
   <div class="overlay hidden" id="draftOverlay">

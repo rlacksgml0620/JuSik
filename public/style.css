@@ -281,3 +281,13 @@ button.ghost { background: transparent; border: 1px solid var(--line); border-ra
   .room-list li .muted { grid-column: 2; }
   .settings { grid-template-columns: 1fr; }
 }
+
+/* 카운트다운 */
+.overlay.countdown { background: rgba(8, 10, 14, 0.7); }
+.count-box { text-align: center; }
+.count-title { font-size: 28px; font-weight: 900; }
+.count-num { font-size: 160px; font-weight: 900; line-height: 1.1; color: var(--accent); font-variant-numeric: tabular-nums; }
+.count-num.pop { animation: pop .5s ease-out; }
+@keyframes pop { from { transform: scale(1.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.count-sub { color: var(--muted); font-size: 15px; }
+@media (max-width: 640px) { .count-num { font-size: 110px; } }

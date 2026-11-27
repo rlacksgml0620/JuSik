@@ -6,14 +6,16 @@ const { drawOptions, describe, applyCard } = require('./cards');
 
 const FAST = !!process.env.DEV_FAST; // 테스트용: 짧은 시간 허용
 const MAX_PLAYERS = 4;
-const DRAFT_MS = FAST ? 6000 : 15000;
-const MG_INTRO_MS = FAST ? 1500 : 4000;
+const DRAFT_MS = FAST ? 6000 : 20000;
+const START_COUNT_MS = FAST ? 2000 : 5000; // 게임 시작 카운트다운
+const ROUND_COUNT_MS = FAST ? 1000 : 3000; // 라운드 시작 전 카운트다운
+const MG_INTRO_MS = FAST ? 1500 : 6000;
 const MG_PLAY_MS = 20000;
 const MG_GRACE_MS = 3000;
-const MG_RESULT_MS = FAST ? 3000 : 7000;
-const ROUND_OPTS = [6, 10, 15];
-const SECS_OPTS = [30, 45, 60];
-const MG_REWARD = [2_000_000, 1_300_000, 800_000, 500_000];
+const MG_RESULT_MS = FAST ? 3000 : 9000;
+const ROUND_OPTS = [6, 8, 10];
+const SECS_OPTS = [45, 60, 90];
+const MG_REWARD = [1_500_000, 1_000_000, 600_000, 300_000];
 const MG_LIMITS = { // 최대 점수(검증용), '잘함' 기준 점수
   chip: { max: 80, good: 28 },
   parking: { max: 500, good: 380 },
@@ -27,7 +29,7 @@ class Room {
     this.io = io; // { sendTo(pid, msg), broadcast(room, msg) }
     this.players = new Map(); // id -> { id, name, token, online }
     this.hostId = null;
-    this.settings = FAST ? { rounds: 4, roundSecs: 8 } : { rounds: 10, roundSecs: 45 };
+    this.settings = FAST ? { rounds: 4, roundSecs: 8 } : { rounds: 8, roundSecs: 60 };
     this.chat = [];
     this.reset();
   }
@@ -110,14 +112,20 @@ class Room {
     this.market = new Market();
     for (const p of this.players.values()) this.market.addPlayer(p.id, p.name);
     this.io.broadcast(this, { t: 'game', symbols: this.market.symbolList(), md: this.market.marketData() });
-    this.chatSystem('게임 시작! 라운드마다 카드를 고르고, 3라운드마다 미니게임이 열립니다.');
-    this._startTrading();
+    this.chatSystem('곧 게임이 시작됩니다! 라운드마다 카드를 고르고, 3라운드마다 미니게임이 열립니다.');
+    this._countdown(START_COUNT_MS);
   }
 
   backToLobby(pid) {
     if (pid !== this.hostId) throw new MarketError('방장만 할 수 있습니다.');
     if (this.phase !== 'ended') return;
     this.reset();
+  }
+
+  // 거래 시작 전 카운트다운 (장은 계속 멈춰 있음)
+  _countdown(ms) {
+    this.phase = 'countdown';
+    this.endsAt = Date.now() + ms;
   }
 
   _startTrading() {
@@ -132,6 +140,7 @@ class Room {
     this.round++;
     if (this.round > 1) m.newDay();
     m.paused = false;
+    m.refreshQuotes();
     this.phase = 'trading';
     this.endsAt = now + this.settings.roundSecs * 1000;
   }
@@ -163,11 +172,14 @@ class Room {
 
   // ---------- 카드 선택 ----------
   _startDraft() {
+    // 앞으로 남은 미니게임 수 (k라운드 뒤에 열림: k % 3 === 0, 마지막 라운드 제외)
+    this.mgLeft = 0;
+    for (let k = this.round + 1; k < this.settings.rounds; k++) if (k % 3 === 0) this.mgLeft++;
     this.phase = 'draft';
     this.endsAt = Date.now() + DRAFT_MS;
     this.drafts.clear();
     for (const p of this.market.players.values()) {
-      this.drafts.set(p.id, { options: drawOptions(this.market, p), picked: null });
+      this.drafts.set(p.id, { options: drawOptions(this.market, p, 3, { mgLeft: this.mgLeft }), picked: null });
       this._sendDraft(p.id);
     }
   }
@@ -183,7 +195,7 @@ class Room {
     if (!d || !p) return null;
     return {
       t: 'draft', endsAt: this.endsAt, rerolls: p.mods.rerolls, picked: d.picked,
-      options: d.options.map((o) => describe(this.market, p, o)),
+      options: d.options.map((o) => describe(this.market, p, o, { mgLeft: this.mgLeft })),
     };
   }
 
@@ -200,7 +212,7 @@ class Room {
   _apply(pid, d, idx) {
     const p = this.market.players.get(pid);
     d.picked = idx;
-    const { info, msg } = applyCard(this.market, p, d.options[idx], { tradingResumeAt: Date.now() });
+    const { info, msg } = applyCard(this.market, p, d.options[idx], { tradingResumeAt: Date.now(), mgLeft: this.mgLeft });
     this.io.sendTo(pid, { t: 'picked', card: info, msg });
     const pl = this.players.get(pid);
     if (info.rarity >= 2) this.chatSystem(`✨ ${pl.name}님이 ${info.rarityName} 카드 [${info.icon} ${info.name}]을(를) 획득했습니다!`);
@@ -213,7 +225,7 @@ class Room {
     if (!d || d.picked != null) return;
     if (p.mods.rerolls <= 0) throw new MarketError('다시 뽑기권이 없습니다.');
     p.mods.rerolls--;
-    d.options = drawOptions(this.market, p);
+    d.options = drawOptions(this.market, p, 3, { mgLeft: this.mgLeft });
     this.market.dirty.add(pid);
     this._sendDraft(pid);
   }
@@ -221,7 +233,7 @@ class Room {
   _endDraft() {
     for (const [pid, d] of this.drafts) if (d.picked == null) this._apply(pid, d, Math.floor(Math.random() * d.options.length));
     this.drafts.clear();
-    this._startTrading();
+    this._countdown(ROUND_COUNT_MS);
   }
 
   // ---------- 미니게임 ----------
@@ -295,7 +307,8 @@ class Room {
     if (this.phase === 'trading') this._endTrading();
     else if (this.phase === 'draft') this._endDraft();
     else if (this.phase === 'minigame') this._endMinigame();
-    else if (this.phase === 'mgresult') this._startTrading();
+    else if (this.phase === 'mgresult') this._countdown(ROUND_COUNT_MS);
+    else if (this.phase === 'countdown') this._startTrading();
   }
 
   state() {
