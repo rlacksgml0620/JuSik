@@ -66,6 +66,15 @@
     const agg = aggregate(S.base, S.tf);
     candles.setData(agg.map(toBar));
     volume.setData(agg.map(toVol));
+    return agg.length;
+  }
+  // 현재가 근처로 화면 맞춤: 세로축 자동 맞춤을 다시 켜고, 최근 캔들 80개를 보여줌
+  function resetView(n) {
+    chart.priceScale('right').applyOptions({ autoScale: true });
+    chart.priceScale('vol').applyOptions({ autoScale: true });
+    const ts = chart.timeScale();
+    if (n > 0) ts.setVisibleLogicalRange({ from: n - 80, to: n + 5 }); // 캔들이 적어도 폭 유지, 최신 캔들은 오른쪽
+    else ts.scrollToRealTime();
   }
   function updateChart(c) {
     if (!c) return;
@@ -126,7 +135,7 @@
       case 'game': onGame(m); break;
       case 'account': setAccount(m.account); break;
       case 'history':
-        if (m.sym === S.sym && m.tf === baseTf()) { S.base = m.candles.slice(); setChartData(); chart.timeScale().scrollToRealTime(); }
+        if (m.sym === S.sym && m.tf === baseTf()) { S.base = m.candles.slice(); resetView(setChartData()); }
         break;
       case 'md': onMarketData(m); break;
       case 'chat': addChat(m.item); break;
@@ -607,13 +616,15 @@
 
   // ---------- 이벤트 바인딩 ----------
   $('symbolTabs').addEventListener('click', (e) => { const b = e.target.closest('[data-sym]'); if (b) selectSymbol(b.dataset.sym); });
+  $('fitBtn').addEventListener('click', () => resetView(aggregate(S.base, S.tf).length));
+  $('chart').addEventListener('dblclick', () => resetView(aggregate(S.base, S.tf).length));
   $('tfBtns').addEventListener('click', (e) => {
     const b = e.target.closest('[data-tf]'); if (!b) return;
     const prevBase = baseTf();
     S.tf = Number(b.dataset.tf);
     $('tfBtns').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
     chart.applyOptions({ timeScale: { secondsVisible: S.tf < 60 } });
-    if (prevBase !== baseTf()) loadHistory(); else setChartData();
+    if (prevBase !== baseTf()) loadHistory(); else resetView(setChartData());
   });
   document.querySelectorAll('.side-tabs button').forEach((b) => b.addEventListener('click', () => setSide(b.dataset.side)));
   document.querySelectorAll('input[name="otype"]').forEach((r) => r.addEventListener('change', () => setType(r.value)));

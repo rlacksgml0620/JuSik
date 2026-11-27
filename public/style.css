@@ -291,3 +291,4 @@ button.ghost { background: transparent; border: 1px solid var(--line); border-ra
 @keyframes pop { from { transform: scale(1.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .count-sub { color: var(--muted); font-size: 15px; }
 @media (max-width: 640px) { .count-num { font-size: 110px; } }
+.tf button.fit { margin-right: 6px; }
