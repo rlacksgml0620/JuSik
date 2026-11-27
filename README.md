@@ -1,5 +1,7 @@
 # 📈 주식 로그라이크 (JuSik)
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/rlacksgml0620/JuSik)
+
 방에 모여 **같은 차트**로 주식을 사고팔고, 라운드마다 **카드**를 골라 빌드를 만들고, **기업 미니게임**으로 주식을 따내는 멀티플레이 로그라이크 게임입니다. 마지막 라운드가 끝났을 때 총자산 1위가 승리합니다.
 
 ## 실행
@@ -78,8 +80,8 @@ test/              엔진 불변식 테스트 + 방 전체 진행 테스트 (npm
 
 ### Render (추천)
 
-1. [Render](https://render.com)에 GitHub 계정으로 로그인합니다.
-2. **New → Blueprint**를 누르고 이 저장소를 선택합니다. `render.yaml`이 자동으로 읽힙니다.
+1. 맨 위의 **Deploy to Render** 버튼을 누릅니다. 처음이면 GitHub 계정으로 로그인합니다.
+2. 설정은 `render.yaml`에서 자동으로 채워집니다. **Apply**만 누르면 됩니다.
 3. 배포가 끝나면 `https://jusik-xxxx.onrender.com` 같은 주소가 생깁니다. 그 주소를 친구들에게 공유하면 됩니다.
 
 직접 설정하려면 **New → Web Service**를 고르고 아래처럼 입력합니다.
