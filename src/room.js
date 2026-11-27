@@ -111,7 +111,7 @@ class Room {
     if (this.phase === 'ended') this.reset();
     this.market = new Market();
     for (const p of this.players.values()) this.market.addPlayer(p.id, p.name);
-    this.io.broadcast(this, { t: 'game', symbols: this.market.symbolList(), md: this.market.marketData() });
+    this.io.broadcast(this, { t: 'game', symbols: this.market.symbolList(), md: this.market.marketData(), index: this.indexInfo() });
     this.chatSystem('곧 게임이 시작됩니다! 라운드마다 카드를 고르고, 3라운드마다 미니게임이 열립니다.');
     this._countdown(START_COUNT_MS);
   }
@@ -138,7 +138,8 @@ class Room {
       this.pausedAt = 0;
     }
     this.round++;
-    if (this.round > 1) m.newDay();
+    if (this.round > 1) { m.roundStart(); m.newDay(); } // 상장폐지 자리에 신규 상장 후 기준가 갱신
+    this.idxStart = m.indexValue();
     m.paused = false;
     m.refreshQuotes();
     this.phase = 'trading';
@@ -165,6 +166,7 @@ class Room {
       }
       if (parts.length) m.events.push({ playerId: p.id, msg: { kind: 'buff', text: `🏦 라운드 보상: ${parts.join(', ')}` } });
     }
+    m.roundEnd(this.idxStart); // 지수 베팅 정산, 관리종목 심사/상장폐지
     if (this.round >= this.settings.rounds) return this._end();
     if (this.round % 3 === 0) this._startMinigame();
     else this._startDraft();
@@ -238,7 +240,7 @@ class Room {
 
   // ---------- 미니게임 ----------
   _startMinigame() {
-    const syms = this.market.symbolList();
+    const syms = this.market.symbolList().filter((s) => s.status !== 'delisted');
     const s = syms[(this.round / 3 - 1) % syms.length];
     const startAt = Date.now() + MG_INTRO_MS;
     this.mg = { sym: s.code, name: s.name, game: s.game, seed: Math.floor(Math.random() * 2 ** 31), startAt, playMs: MG_PLAY_MS, scores: new Map() };
@@ -328,7 +330,7 @@ class Room {
   snapshotFor(pid) {
     const msgs = [this.state(), { t: 'chatlog', items: this.chat.slice(-50) }];
     if (this.market) {
-      msgs.push({ t: 'game', symbols: this.market.symbolList(), md: this.market.marketData(), news: this.market.news });
+      msgs.push({ t: 'game', symbols: this.market.symbolList(), md: this.market.marketData(), news: this.market.news, index: this.indexInfo() });
       const p = this.market.players.get(pid);
       if (p) msgs.push({ t: 'account', account: this.market.account(p) });
     }
@@ -337,6 +339,13 @@ class Room {
     if (this.phase === 'mgresult') msgs.push({ t: 'mgresult', ...this.mgResult });
     if (this.phase === 'ended') msgs.push({ t: 'final', ...this.final });
     return msgs;
+  }
+
+  // 시장지수: 현재값, 이번 라운드 시작값 (게임 시작 = 1000)
+  indexInfo() {
+    if (!this.market) return null;
+    const v = this.market.indexValue();
+    return { value: Math.round(v * 100) / 100, roundStart: Math.round((this.idxStart || v) * 100) / 100 };
   }
 
   summary() {

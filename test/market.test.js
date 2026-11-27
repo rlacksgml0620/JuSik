@@ -96,4 +96,36 @@ for (const card of CARDS) for (let r = card.minRarity || 0; r < 4; r++) {
   applyCard(c, cp, { id: card.id, rarity: r, sym: card.needsSym ? 'GRM' : undefined }, { tradingResumeAt: Date.now() });
 }
 
+// 상장폐지: 보유 주식 소멸, 보험금 지급, 주문 취소, 다음 라운드에 신규 상장
+const dm = new Market(); dm.paused = false;
+const holder = dm.addPlayer('h', 'h'), insured = dm.addPlayer('i', 'i');
+insured.mods.delistIns = 0.7;
+const victim = dm.symbols.get('DKB');
+dm.grantShares(holder, 'DKB', 100, victim.last); dm.grantShares(insured, 'DKB', 100, victim.last);
+dm.placeOrder(holder, { sym: 'DKB', side: 'sell', type: 'limit', price: victim.ref * 1.2 - (victim.ref * 1.2) % tickSize(victim.ref * 1.2), qty: 50 });
+const cashBefore = insured.cash;
+victim.status = 'warning'; victim.warnAt = 0; victim.last = Math.round(victim.base * 0.3); // 폭락 → 심사 시 무조건 폐지
+dm.roundEnd(dm.indexValue());
+assert.strictEqual(victim.status, 'delisted');
+assert.ok(!holder.positions.DKB && !insured.positions.DKB, '보유 주식 소멸');
+assert.strictEqual(insured.cash - cashBefore, Math.round(100 * victim.base * 0.7), '보험금 70%');
+assert.ok(![...dm.orders.values()].some((o) => o.sym === 'DKB'), '주문 취소');
+assert.throws(() => dm.placeOrder(holder, { sym: 'DKB', side: 'buy', type: 'market', qty: 1 }), /상장폐지/);
+assert.ok(dm.roundStart(), '신규 상장');
+assert.ok(!dm.symbols.has('DKB') && dm.symbols.size === 4, '자리 교체');
+assert.ok(dm.broadcasts.some((b) => b.t === 'symbols'));
+
+// 지수 베팅: 지수가 내리면 인버스만 받음 / 대출은 총자산에서 차감
+const bm = new Market();
+const bear = bm.addPlayer('b', 'b'), bull = bm.addPlayer('u', 'u');
+bear.mods.bets.push({ type: 'down', per: 100_000 }); bull.mods.bets.push({ type: 'up', per: 100_000 });
+const st = bm.indexValue();
+for (const x of bm.symbols.values()) x.last = Math.round(x.last * 0.95);
+const c0 = bear.cash, c1 = bull.cash;
+bm.roundEnd(st);
+assert.ok(bear.cash - c0 > 400_000 && bull.cash === c1, '인버스 베팅 정산');
+const lp = bm.addPlayer('l', 'l');
+applyCard(bm, lp, { id: 'loan', rarity: 0 }, {});
+assert.strictEqual(Math.round(bm.equity(lp)), 10_000_000 - 300_000, '대출 이자만큼 총자산 감소');
+
 console.log(`OK: 주문 ${ok}건 처리, ${rejected}건 거부, 카드 ${cardsApplied}장 적용, 불변식 유지. 레버리지 손익 x1=${Math.round(pnl1)} x3=${Math.round(pnl3)}`);

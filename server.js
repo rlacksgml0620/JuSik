@@ -133,6 +133,7 @@ function handle(c, m) {
     case 'lobby': room.backToLobby(pid); io.broadcast(room, room.state()); pushRoomList(); break;
     case 'chat': {
       const text = String(m.text || '').trim().slice(0, 200);
+      if (process.env.DEV_FAST && text.startsWith('/') && room.market) { devCommand(room, text); break; }
       if (text) room.addChat({ name: room.players.get(pid).name, text, ts: Date.now() });
       break;
     }
@@ -156,6 +157,16 @@ function handle(c, m) {
   }
 }
 
+// 개발용 치트 (DEV_FAST일 때만): /event boom|bust|audit|news|surge|theme, /delist CODE
+function devCommand(room, text) {
+  const m = room.market;
+  const [cmd, arg] = text.slice(1).split(/\s+/);
+  if (cmd === 'event') {
+    for (let i = 0; i < 50 && m.upcoming.kind !== arg; i++) m._scheduleNews(Date.now());
+    m.upcoming.at = m.upcoming.revealAt = Date.now();
+  } else if (cmd === 'delist' && m.symbols.has(arg)) m._delist(m.symbols.get(arg));
+}
+
 // ---------- 루프 ----------
 setInterval(() => {
   for (const room of rooms.values()) {
@@ -174,7 +185,7 @@ setInterval(() => {
     const m = room.market;
     if (!m) continue;
     const trades = m.pendingTrades.splice(0);
-    if (!m.paused || trades.length || n % 4 === 0) io.broadcast(room, { t: 'md', md: m.marketData(), trades: trades.slice(-60) });
+    if (!m.paused || trades.length || n % 4 === 0) io.broadcast(room, { t: 'md', md: m.marketData(), trades: trades.slice(-60), index: room.indexInfo() });
     for (const b of m.broadcasts.splice(0)) io.broadcast(room, b);
     for (const ev of m.events.splice(0)) io.sendTo(ev.playerId, { t: 'event', ...ev.msg });
     for (const pid of m.dirty) { const p = m.players.get(pid); if (p) io.sendTo(pid, { t: 'account', account: m.account(p) }); }

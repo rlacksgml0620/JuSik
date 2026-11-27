@@ -18,7 +18,7 @@
   const S = {
     ws: null, offset: 0, you: null, code: null, room: null,
     symbols: [], md: {}, sym: null, tf: 15, base: [], account: null,
-    side: 'buy', otype: 'limit', tape: [], news: [], reqId: 1,
+    side: 'buy', otype: 'limit', tape: [], news: [], reqId: 1, names: {}, index: null,
     draft: null, mg: null, mgGame: null, mgSubmitted: false, result: null,
   };
   const serverNow = () => Date.now() + S.offset;
@@ -93,10 +93,17 @@
     candles.setData([]); volume.setData([]);
     send({ t: 'history', sym: S.sym, tf: baseTf() });
   }
+  let fairLine = null;
   function updateAvgLine() {
     const ps = S.account && S.account.positions[S.sym];
     if (avgLine) { candles.removePriceLine(avgLine); avgLine = null; }
     if (ps && ps.qty > 0) avgLine = candles.createPriceLine({ price: ps.avgCost, color: '#ffd166', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '평균단가' });
+    // 차트 분석가 카드: 적정가 표시
+    const fair = S.account && S.account.fairs && S.account.fairs[S.sym];
+    if (fair) {
+      if (fairLine) fairLine.applyOptions({ price: fair });
+      else fairLine = candles.createPriceLine({ price: fair, color: '#b77dff', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: '적정가' });
+    } else if (fairLine) { candles.removePriceLine(fairLine); fairLine = null; }
   }
 
   // ---------- 네트워크 ----------
@@ -133,6 +140,7 @@
         break;
       case 'room': onRoom(m); break;
       case 'game': onGame(m); break;
+      case 'symbols': onSymbols(m); break;
       case 'account': setAccount(m.account); break;
       case 'history':
         if (m.sym === S.sym && m.tf === baseTf()) { S.base = m.candles.slice(); resetView(setChartData()); }
@@ -140,7 +148,14 @@
       case 'md': onMarketData(m); break;
       case 'chat': addChat(m.item); break;
       case 'chatlog': $('chat').innerHTML = ''; $('waitChat').innerHTML = ''; m.items.forEach(addChat); break;
-      case 'news': S.news.unshift(m.item); renderNews(); showTicker(`📰 ${m.item.title}`); break;
+      case 'news': {
+        S.news.unshift(m.item); renderNews();
+        const k = m.item.kind;
+        const big = ['boom', 'bust', 'delist', 'ipo', 'audit', 'warn', 'surge'].includes(k);
+        showTicker(big ? m.item.title : `📰 ${m.item.title}`, 'k-' + k + (big ? ' big' : ''));
+        if (big) toast(esc(m.item.title), 'gold');
+        break;
+      }
       case 'event': onEvent(m); break;
       case 'draft': S.draft = m; renderDraft(); break;
       case 'picked': onPicked(m); break;
@@ -204,7 +219,7 @@
     $('phaseLabel').className = 'phase ' + r.phase + (r.phase === 'trading' && r.endsAt - serverNow() < 10000 ? ' hurry' : '');
     $('pausedBadge').classList.toggle('hidden', r.phase === 'trading');
     $('pausedBadge').textContent = r.phase === 'countdown' ? '곧 개장합니다' : r.phase === 'ended' ? '게임 종료' : '장 마감 · 다음 라운드 대기';
-    $('submit').disabled = r.phase !== 'trading';
+    $('submit').disabled = r.phase !== 'trading' || (S.md[S.sym] && S.md[S.sym].status === 'delisted');
     if (r.phase === 'draft') $('draftTimer').textContent = mmss(r.endsAt - serverNow());
   }
 
@@ -224,8 +239,26 @@
       : mgNext ? '이번 라운드가 끝나면 🎮 미니게임이 열립니다' : next === r.rounds ? '🏁 마지막 라운드입니다!' : '장이 곧 열립니다';
   }
 
+  function rememberNames() { for (const s of S.symbols) S.names[s.code] = s.name; }
+
+  // 상장폐지 → 신규 상장으로 종목 목록이 바뀜
+  function onSymbols(m) {
+    S.symbols = m.symbols; S.md = m.md; rememberNames();
+    $('symbolTabs').innerHTML = '';
+    const cur = S.md[S.sym];
+    if (!cur || cur.status === 'delisted') selectSymbol(S.symbols.find((s) => s.status !== 'delisted').code, true);
+    else renderTabs();
+  }
+
+  function renderIndex() {
+    const ix = S.index;
+    if (!ix) return;
+    const total = (ix.value / 1000 - 1) * 100, today = (ix.value / ix.roundStart - 1) * 100;
+    $('indexBox').innerHTML = `<span class="muted">시장지수</span> <b class="${cls(total)}">${ix.value.toFixed(2)}</b> <small class="${cls(today)}">${pct(today)}</small><small class="muted"> · 시작 대비 <span class="${cls(total)}">${pct(total)}</span></small>`;
+  }
+
   function onGame(m) {
-    S.symbols = m.symbols; S.md = m.md;
+    S.symbols = m.symbols; S.md = m.md; S.index = m.index; rememberNames(); renderIndex();
     S.news = m.news || [];
     S.tape = [];
     S.result = null; S.mgSubmitted = false;
@@ -236,6 +269,7 @@
 
   function onMarketData(m) {
     S.md = m.md;
+    if (m.index) { S.index = m.index; renderIndex(); }
     const q = S.md[S.sym];
     if (!q) return;
     updateChart(baseTf() === 5 ? q.c5 : q.c60);
@@ -257,7 +291,7 @@
   }
 
   // ---------- 계산 ----------
-  const symName = (c) => (S.symbols.find((s) => s.code === c) || {}).name || c;
+  const symName = (c) => S.names[c] || c; // 상장폐지된 종목 이름도 기억
   const chg = (q) => (q.last / q.ref - 1) * 100;
   function adjust(acc, pnl) {
     let v = pnl * acc.mods.leverage;
@@ -265,7 +299,7 @@
     return v;
   }
   function equityOf(acc) {
-    let v = acc.cash;
+    let v = acc.cash - (acc.mods.debt || 0);
     for (const [k, p] of Object.entries(acc.positions)) {
       if (!p.qty || !S.md[k]) continue;
       const val = p.qty * S.md[k].last, base = val - p.qty * p.avgCost;
@@ -284,8 +318,10 @@
       const q = S.md[el.dataset.sym];
       if (!q) continue;
       el.classList.toggle('on', el.dataset.sym === S.sym);
+      el.dataset.status = q.status;
       const c = chg(q);
-      el.querySelector('.p').innerHTML = `<span class="${cls(c)}">${fmt(q.last)} <small>${pct(c)}</small></span>`;
+      const badge = q.status === 'delisted' ? '<em class="badge dead">상장폐지</em>' : q.status === 'warning' ? '<em class="badge warn">관리</em>' : q.isNew ? '<em class="badge new">신규</em>' : '';
+      el.querySelector('.p').innerHTML = q.status === 'delisted' ? badge : `<span class="${cls(c)}">${fmt(q.last)} <small>${pct(c)}</small></span>${badge}`;
     }
   }
 
@@ -293,7 +329,8 @@
     const q = S.md[S.sym];
     const c = chg(q), d = q.last - q.ref;
     $('qName').textContent = q.name;
-    $('qCode').textContent = `${q.code} · ${q.sector}`;
+    const st = { warning: ' · 🚨 관리종목 (라운드 종료 후 상장폐지 심사)', delisted: ' · 💀 상장폐지 (거래 불가)' }[q.status] || (q.isNew ? ' · 🎉 신규 상장 (변동성 큼)' : '');
+    $('qCode').textContent = `${q.code} · ${q.sector}${st}`;
     $('qPrice').innerHTML = `<span class="${cls(c)}">${fmt(q.last)}<small>${d > 0 ? '▲' : d < 0 ? '▼' : ''} ${fmt(Math.abs(d))} (${pct(c)})</small></span>`;
     $('qStats').innerHTML = `<span>고가 <b class="up">${fmt(q.high)}</b></span><span>저가 <b class="down">${fmt(q.low)}</b></span><span>거래량 <b>${fmt(q.volume)}</b></span><span>상한 <b>${fmt(q.upper)}</b> 하한 <b>${fmt(q.lower)}</b></span>`;
   }
@@ -336,6 +373,10 @@
     if (m.luck > 0) chips.push(['🍀', `행운 ${m.luck}`, '높은 등급 카드 확률 증가']);
     if (m.rerolls > 0) chips.push(['🔄', `리롤 ${m.rerolls}`, '카드 다시 뽑기']);
     if (m.gameMult > 1) chips.push(['🎮', `미니게임 x${m.gameMult.toFixed(1)}`, '미니게임 보상 증가']);
+    if (m.debt > 0) chips.push(['🏧', `대출 -${fmt(m.debt)}원`, '총자산에서 차감되는 상환액']);
+    for (const b of m.bets || []) chips.push([b.type === 'down' ? '🐻' : '🐂', `${b.type === 'down' ? '인버스' : '불장'} 1%당 ${fmt(b.per)}원`, '이번 라운드 지수 변화로 정산']);
+    if (m.delistIns > 0) chips.push(['🧯', `상폐보험 ${Math.round(m.delistIns * 100)}%`, '상장폐지 시 매입금액 보상']);
+    if (m.analyst > 0) chips.push(['🔭', `적정가 ${m.analyst}라운드`, '차트에 보라색 적정가 선 표시']);
     $('buffs').innerHTML = chips.length ? chips.map(([i, t, d]) => `<span class="buff" title="${esc(d)}">${i} ${esc(t)}</span>`).join('') : '<span class="muted">아직 카드 효과가 없습니다. 라운드가 끝나면 카드를 고릅니다.</span>';
     $('myCards').innerHTML = a.cards.length ? a.cards.slice().reverse().map((c) => `<li class="r-${c.rarityKey}"><b>${c.icon} ${esc(c.name)}</b><span>${esc(c.desc)}</span></li>`).join('') : '<li class="muted">획득한 카드가 없습니다</li>';
   }
@@ -368,7 +409,7 @@
   function renderHistory() {
     const a = S.account;
     const head = '<tr><th>시간</th><th>종목</th><th>구분</th><th>체결가</th><th>수량</th><th>금액</th><th>수수료·세금</th><th>실현손익</th></tr>';
-    const body = a.history.map((h) => `<tr><td class="muted">${hhmmss(h.ts)}</td><td>${esc(symName(h.sym))}</td><td class="${h.side === 'buy' ? 'up' : 'down'}">${h.side === 'buy' ? '매수' : '매도'}</td><td>${fmt(h.price)}</td><td>${fmt(h.qty)}</td><td>${fmt(h.price * h.qty)}</td><td>${fmt(h.fee)}</td><td class="${cls(h.pnl || 0)}">${h.pnl != null ? fmt(h.pnl) : ''}</td></tr>`).join('');
+    const body = a.history.map((h) => `<tr><td class="muted">${hhmmss(h.ts)}</td><td>${esc(symName(h.sym))}</td><td class="${h.side === 'buy' ? 'up' : 'down'}">${{ buy: '매수', sell: '매도', delist: '💀상폐' }[h.side]}</td><td>${fmt(h.price)}</td><td>${fmt(h.qty)}</td><td>${fmt(h.price * h.qty)}</td><td>${fmt(h.fee)}</td><td class="${cls(h.pnl || 0)}">${h.pnl != null ? fmt(h.pnl) : ''}</td></tr>`).join('');
     $('histTable').innerHTML = head + (body || '<tr><td colspan="8" class="empty">체결 내역이 없습니다</td></tr>');
   }
 
@@ -380,7 +421,7 @@
   }
 
   function renderNews() {
-    $('news').innerHTML = S.news.map((n) => `<li><time>${hhmmss(n.ts)} · ${esc(symName(n.sym))}</time>${esc(n.title)}</li>`).join('') || '<li class="muted">아직 뉴스가 없습니다</li>';
+    $('news').innerHTML = S.news.map((n) => `<li class="k-${n.kind || 'news'}"><time>${hhmmss(n.ts)} · ${n.sym ? esc(symName(n.sym)) : '전체 시장'}</time>${esc(n.title)}</li>`).join('') || '<li class="muted">아직 뉴스가 없습니다</li>';
   }
 
   function addChat(item) {

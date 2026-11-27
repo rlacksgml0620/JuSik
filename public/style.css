@@ -292,3 +292,26 @@ button.ghost { background: transparent; border: 1px solid var(--line); border-ra
 .count-sub { color: var(--muted); font-size: 15px; }
 @media (max-width: 640px) { .count-num { font-size: 110px; } }
 .tf button.fit { margin-right: 6px; }
+
+/* 시장지수, 종목 상태, 큰 이벤트 */
+.index-box { white-space: nowrap; font-size: 12px; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.index-box b { font-size: 15px; }
+.index-box small { margin-left: 4px; }
+.badge { font-style: normal; font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 4px; margin-left: 4px; vertical-align: 1px; }
+.badge.warn { background: #ff9f43; color: #111; }
+.badge.dead { background: #444; color: #ccc; margin-left: 0; }
+.badge.new { background: #4cd38a; color: #111; }
+.sym-tab[data-status="delisted"] { opacity: .5; }
+.sym-tab[data-status="delisted"] .n { text-decoration: line-through; }
+.sym-tab[data-status="warning"] { border-color: #ff9f43; }
+.news-ticker.big { font-size: 17px; padding: 12px 22px; }
+.news-ticker.k-boom { background: var(--up); color: #fff; }
+.news-ticker.k-bust { background: var(--down); color: #fff; }
+.news-ticker.k-delist { background: #222; color: #fff; border: 1px solid #555; }
+.news-ticker.k-audit, .news-ticker.k-warn { background: #ff9f43; color: #111; }
+.news-ticker.k-ipo { background: #4cd38a; color: #111; }
+.news li.k-boom { border-left: 3px solid var(--up); padding-left: 6px; }
+.news li.k-bust { border-left: 3px solid var(--down); padding-left: 6px; }
+.news li.k-delist, .news li.k-audit, .news li.k-warn { border-left: 3px solid #ff9f43; padding-left: 6px; }
+.news li.k-ipo { border-left: 3px solid #4cd38a; padding-left: 6px; }
+@media (max-width: 640px) { .index-box { order: 2; } }

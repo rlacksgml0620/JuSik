@@ -9,12 +9,24 @@ const C5 = 5, C60 = 60;
 const MAX_C5 = 4000, MAX_C60 = 3000;
 const LIMIT = 0.3;            // 라운드(하루) 가격제한폭
 const INSIDER_LEAD = 15_000;  // 내부자 정보: 뉴스 몇 ms 전에 알려주나
+const TREND = 0.0005;         // 시장 전체 우상향 추세 (거래 1초당 로그 수익률, 60초 ≈ +3%)
+const TREND_PULL = 0.003;     // 지수가 추세선에서 벗어났을 때 되돌리는 힘
+const STOCK_PULL = 0.0006;    // 개별 종목이 추세선으로 돌아오는 힘 (약하게)
 
 const SYMBOLS = [
-  { code: 'GRM', name: '구름전자', price: 72000, vol: 0.0007, sector: '반도체', game: 'chip' },
-  { code: 'BNN', name: '바나나모빌리티', price: 18500, vol: 0.0011, sector: '자동차', game: 'parking' },
-  { code: 'DKB', name: '도깨비바이오', price: 4200, vol: 0.0018, sector: '바이오', game: 'math' },
-  { code: 'DLB', name: '달빛엔터', price: 31000, vol: 0.0009, sector: '엔터', game: 'reaction' },
+  { code: 'GRM', name: '구름전자', price: 72000, vol: 0.0009, sector: '반도체', game: 'chip' },
+  { code: 'BNN', name: '바나나모빌리티', price: 18500, vol: 0.0013, sector: '자동차', game: 'parking' },
+  { code: 'DKB', name: '도깨비바이오', price: 4200, vol: 0.0022, sector: '바이오', game: 'math' },
+  { code: 'DLB', name: '달빛엔터', price: 31000, vol: 0.0011, sector: '엔터', game: 'reaction' },
+];
+// 상장폐지된 자리를 채울 신규 상장 후보
+const IPO_POOL = [
+  { code: 'BGB', name: '번개배터리', price: 26000, vol: 0.0016, sector: '2차전지', game: 'chip' },
+  { code: 'GRG', name: '고래게임즈', price: 9800, vol: 0.0018, sector: '게임', game: 'reaction' },
+  { code: 'EHA', name: '은하항공', price: 15200, vol: 0.0012, sector: '항공', game: 'parking' },
+  { code: 'TKF', name: '토끼푸드', price: 6400, vol: 0.0010, sector: '식품', game: 'math' },
+  { code: 'BYC', name: '별빛코인', price: 2300, vol: 0.0030, sector: '가상자산', game: 'reaction' },
+  { code: 'HMR', name: '하마로보틱스', price: 41000, vol: 0.0014, sector: '로봇', game: 'chip' },
 ];
 
 const NEWS_UP = [
@@ -31,6 +43,11 @@ const NEWS_DOWN = [
   '{n}, 주력 제품 리콜 사태',
   '{n}, 경쟁사 신제품 출시로 점유율 하락 우려',
 ];
+const SURGE_UP = ['{n}, 세계 최초 기술 개발 성공… 상한가 직행?', '{n}, 글로벌 빅테크가 인수 추진 중이라는 보도'];
+const SURGE_DOWN = ['{n}, 공장 대형 화재로 생산 전면 중단', '{n}, 핵심 사업 정부 규제 철퇴'];
+const BOOM = ['🚀 전체 호황! 기준금리 전격 인하', '🚀 전체 호황! 정부 대규모 경기부양책 발표', '🚀 전체 호황! 외국인 투자자 역대 최대 순매수'];
+const BUST = ['🥶 전체 불황! 글로벌 금융위기 우려 확산', '🥶 전체 불황! 기준금리 기습 인상', '🥶 전체 불황! 경기침체 공식 진입'];
+const THEME = ['🔥 테마주 열풍! {a}·{b} 동반 급등', '🔥 개인투자자 커뮤니티 화제… {a}·{b} 매수 몰려'];
 
 function tickSize(p) {
   if (p < 2000) return 1;
@@ -69,6 +86,10 @@ function defaultMods() {
     luck: 0,           // 카드 등급 운
     rerolls: 0,        // 다시 뽑기권
     gameMult: 1,       // 미니게임 보상 배율
+    debt: 0,           // 마진 대출 상환액 (총자산에서 차감)
+    bets: [],          // 다음 라운드 지수 베팅 [{ type: 'up'|'down', per }]
+    delistIns: 0,      // 상장폐지 보험 보상률
+    analyst: 0,        // 적정가 표시 남은 라운드
   };
 }
 
@@ -85,24 +106,41 @@ class Market {
     this.checkCash = new Set();
     this.seq = 1;
     this.paused = true;
-    this.upcoming = null;      // 다음 뉴스
-    for (const s of SYMBOLS) {
-      // 게임마다 시작가를 조금씩 다르게
-      const price = roundTick(s.price * rand(0.75, 1.3));
-      this.symbols.set(s.code, {
-        code: s.code, name: s.name, sector: s.sector, game: s.game, vol: s.vol,
-        fair: price, anchor: price, last: price, ref: price, open: price,
-        high: price, low: price, volume: 0, value: 0,
-        bids: [], asks: [], c5: [], c60: [], drifts: [],
-      });
-    }
+    this.upcoming = null;      // 다음 이벤트
+    this.trend = 0;            // 추세선 (로그), 거래 시간에 따라 증가
+    this.ipoPool = IPO_POOL.slice().sort(() => Math.random() - 0.5);
+    for (const s of SYMBOLS) this._list(s, false);
     this._scheduleNews(Date.now());
     this.refreshQuotes();
   }
 
+  _list(def, isNew) {
+    // 게임마다 시작가를 조금씩 다르게. base: 지수 계산 기준가(상장가)
+    const price = roundTick(def.price * rand(0.75, 1.3));
+    const s = {
+      code: def.code, name: def.name, sector: def.sector, game: def.game, vol: def.vol,
+      fair: price, base: price, trendAt: this.trend, last: price, ref: price, open: price,
+      high: price, low: price, volume: 0, value: 0, status: 'normal', warnAt: 0, isNew,
+      bids: [], asks: [], c5: [], c60: [], drifts: [],
+    };
+    this.symbols.set(s.code, s);
+    return s;
+  }
+
+  listed() { return [...this.symbols.values()].filter((s) => s.status !== 'delisted'); }
+
+  // 시장지수: 상장 종목들의 (현재가/상장가) 기하평균 x 1000
+  indexValue(useFair = false) {
+    const ls = this.listed();
+    if (!ls.length) return 1000;
+    let sum = 0;
+    for (const s of ls) sum += Math.log((useFair ? s.fair : s.last) / s.base) + s.trendAt;
+    return 1000 * Math.exp(sum / ls.length);
+  }
+
   // 봇 호가를 즉시 깔아둠 (게임 생성/라운드 개장 직후 빈 호가창 방지)
   refreshQuotes() {
-    for (const s of this.symbols.values()) this._marketMake(s);
+    for (const s of this.listed()) this._marketMake(s);
   }
 
   // ---------- 플레이어 ----------
@@ -132,7 +170,7 @@ class Market {
   }
 
   equity(p) {
-    let v = p.cash;
+    let v = p.cash - p.mods.debt;
     for (const [sym, ps] of Object.entries(p.positions)) {
       if (!ps.qty) continue;
       const val = ps.qty * this.symbols.get(sym).last;
@@ -152,6 +190,7 @@ class Market {
       id: p.id, name: p.name, cash: p.cash, reservedCash: p.reservedCash,
       positions, realized: Math.round(p.realized), orders, history: p.history.slice(0, 50),
       equity: Math.round(this.equity(p)), startCash: START_CASH, mods: p.mods, cards: p.cards,
+      fairs: p.mods.analyst > 0 ? Object.fromEntries(this.listed().map((s) => [s.code, roundTick(s.fair)])) : null,
     };
   }
 
@@ -197,6 +236,7 @@ class Market {
     if (this.paused) throw new MarketError('지금은 거래 시간이 아닙니다.');
     const s = this.symbols.get(sym);
     if (!s) throw new MarketError('없는 종목입니다.');
+    if (s.status === 'delisted') throw new MarketError('상장폐지된 종목입니다.');
     if (side !== 'buy' && side !== 'sell') throw new MarketError('잘못된 주문 방향');
     if (type !== 'limit' && type !== 'market') throw new MarketError('잘못된 주문 유형');
     qty = Number(qty);
@@ -398,11 +438,17 @@ class Market {
     if (this.paused) return;
     const now = Date.now();
     this._newsTick(now);
-    for (const s of this.symbols.values()) {
-      let mu = 0.000002 * Math.log(s.anchor / s.fair);
+    // 우상향: 추세선이 계속 오르고, 지수가 추세선에서 멀어지면 전체를 끌어당김
+    this.trend += TREND;
+    const idxGap = this.trend - Math.log(this.indexValue(true) / 1000);
+    for (const p of this.players.values()) if (p.mods.analyst > 0) this.dirty.add(p.id);
+    for (const s of this.listed()) {
+      const own = this.trend - s.trendAt - Math.log(s.fair / s.base);
+      let mu = TREND + TREND_PULL * idxGap + STOCK_PULL * own;
       for (const d of s.drifts) { mu += d.perSec; d.left--; }
       s.drifts = s.drifts.filter((d) => d.left > 0);
-      s.fair *= Math.exp(mu + s.vol * gauss());
+      const vol = s.isNew ? s.vol * 2 : s.vol; // 신규 상장 첫 라운드는 변동성 2배
+      s.fair *= Math.exp(mu + vol * gauss());
       s.fair = Math.min(Math.max(s.fair, s.ref * (1 - LIMIT + 0.01), 50), s.ref * (1 + LIMIT - 0.01));
       this._marketMake(s);
       this._noise(s);
@@ -451,18 +497,55 @@ class Market {
     }
   }
 
-  // ---------- 뉴스 (내부자 카드 보유자는 미리 받음) ----------
+  // ---------- 이벤트 (내부자 카드 보유자는 미리 받음) ----------
+  // 종류: 개별 호재/악재, 개별 급등/폭락, 전체 호황/불황, 테마, 감사의견 거절(관리종목), 관리종목 회생 기대
   _scheduleNews(now) {
-    const syms = [...this.symbols.values()];
-    const s = syms[Math.floor(Math.random() * syms.length)];
-    const good = Math.random() < 0.5;
-    const pool = good ? NEWS_UP : NEWS_DOWN;
-    const at = now + rand(35, 60) * 1000;
-    this.upcoming = {
-      sym: s.code, good, mag: rand(0.03, 0.09), secs: Math.round(rand(15, 30)),
-      title: pool[Math.floor(Math.random() * pool.length)].replace('{n}', s.name),
-      at, revealAt: at - INSIDER_LEAD, revealed: false,
-    };
+    const ls = this.listed();
+    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const warned = ls.filter((s) => s.status === 'warning');
+    const kinds = [['news', 46], ['surge', 9], ['boom', 13], ['bust', 9], ['theme', 9]];
+    if (!warned.length && ls.length >= 3) kinds.push(['audit', 7]);
+    if (warned.length) kinds.push(['rescue', 6]);
+    let r = Math.random() * kinds.reduce((a, k) => a + k[1], 0);
+    let kind = kinds[0][0];
+    for (const [k, w] of kinds) { r -= w; if (r < 0) { kind = k; break; } }
+
+    const ev = { kind, effects: [], sym: null };
+    const s = pick(ls);
+    if (kind === 'news') {
+      const good = Math.random() < 0.55;
+      ev.sym = s.code; ev.good = good;
+      ev.title = pick(good ? NEWS_UP : NEWS_DOWN).replace('{n}', s.name);
+      ev.effects.push([s.code, (good ? 1 : -1) * rand(0.05, 0.14), rand(10, 25)]);
+    } else if (kind === 'surge') {
+      const good = Math.random() < 0.5;
+      ev.sym = s.code; ev.good = good;
+      ev.title = (good ? '⚡ ' : '💥 ') + pick(good ? SURGE_UP : SURGE_DOWN).replace('{n}', s.name);
+      ev.effects.push([s.code, (good ? 1 : -1) * rand(0.18, 0.27), rand(8, 15)]);
+    } else if (kind === 'boom' || kind === 'bust') {
+      const good = kind === 'boom';
+      ev.good = good;
+      ev.title = pick(good ? BOOM : BUST);
+      const base = good ? rand(0.06, 0.13) : -rand(0.05, 0.11);
+      for (const x of ls) ev.effects.push([x.code, base * rand(0.6, 1.4), rand(20, 40)]);
+    } else if (kind === 'theme') {
+      const two = ls.slice().sort(() => Math.random() - 0.5).slice(0, 2);
+      ev.good = true;
+      ev.title = pick(THEME).replace('{a}', two[0].name).replace('{b}', two[1] ? two[1].name : two[0].name);
+      for (const x of two) ev.effects.push([x.code, rand(0.08, 0.16), rand(12, 25)]);
+    } else if (kind === 'audit') {
+      ev.sym = s.code; ev.good = false;
+      ev.title = `🚨 ${s.name}, 감사의견 거절… 관리종목 지정! 라운드 종료 후 상장폐지 심사`;
+      ev.effects.push([s.code, -rand(0.15, 0.25), rand(8, 15)]);
+    } else if (kind === 'rescue') {
+      const w = pick(warned);
+      ev.sym = w.code; ev.good = true;
+      ev.title = `🛟 ${w.name}, 대형 투자 유치 추진… 상장 유지 기대감`;
+      ev.effects.push([w.code, rand(0.12, 0.2), rand(10, 20)]);
+      ev.rescue = true;
+    }
+    const at = now + rand(25, 45) * 1000;
+    this.upcoming = { ...ev, at, revealAt: at - INSIDER_LEAD, revealed: false };
   }
 
   _newsTick(now) {
@@ -479,13 +562,96 @@ class Market {
       }
     }
     if (now >= u.at) {
-      this.push(u.sym, u.good ? u.mag : -u.mag, u.secs);
-      const item = { id: this.seq++, sym: u.sym, title: u.title, ts: now };
-      this.news.unshift(item);
-      if (this.news.length > 30) this.news.length = 30;
-      this.broadcasts.push({ t: 'news', item });
+      for (const [code, pct, secs] of u.effects) {
+        const s = this.symbols.get(code);
+        if (s && s.status !== 'delisted') this.push(code, pct, Math.round(secs));
+      }
+      if (u.kind === 'audit') { const s = this.symbols.get(u.sym); if (s && s.status === 'normal') { s.status = 'warning'; s.warnAt = now; } }
+      if (u.rescue) { const s = this.symbols.get(u.sym); if (s) s.rescued = true; }
+      this._announce(u.kind, u.sym, u.title);
       this._scheduleNews(now);
     }
+  }
+
+  _announce(kind, sym, title) {
+    const item = { id: this.seq++, kind, sym, title, ts: Date.now() };
+    this.news.unshift(item);
+    if (this.news.length > 40) this.news.length = 40;
+    this.broadcasts.push({ t: 'news', item });
+  }
+
+  // ---------- 라운드 경계 (방에서 호출) ----------
+  // 라운드 종료: 지수 베팅 정산, 적정가 표시 차감, 관리종목 심사/지정
+  roundEnd(idxStart) {
+    const idx = this.indexValue();
+    const chg = (idx / idxStart - 1) * 100;
+    for (const p of this.players.values()) {
+      for (const b of p.mods.bets) {
+        const pts = Math.max(0, b.type === 'down' ? -chg : chg);
+        const pay = Math.round(pts * b.per);
+        if (pay > 0) this.addCash(p, pay);
+        this.events.push({ playerId: p.id, msg: { kind: 'buff', text: `${b.type === 'down' ? '🐻 인버스' : '🐂 불장'} 베팅 정산: 지수 ${chg >= 0 ? '+' : ''}${chg.toFixed(2)}% → ${pay > 0 ? '+' + pay.toLocaleString('ko-KR') + '원' : '꽝'}` } });
+      }
+      if (p.mods.bets.length) { p.mods.bets = []; this.dirty.add(p.id); }
+      if (p.mods.analyst > 0) { p.mods.analyst--; this.dirty.add(p.id); }
+    }
+    const now = Date.now();
+    for (const s of this.listed()) {
+      s.isNew = false;
+      const ratio = s.last / s.base / Math.exp(this.trend - s.trendAt);
+      if (s.status === 'warning') {
+        if (now - s.warnAt < 20_000) continue; // 라운드 막판 지정이면 다음 라운드 종료 때 심사
+        // 심사: 주가가 많이 빠졌으면 무조건 폐지, 아니면 반반 (회생 뉴스가 있었으면 유리)
+        const p = ratio < 0.55 ? 1 : s.rescued ? 0.25 : 0.5;
+        if (Math.random() < p) this._delist(s);
+        else {
+          s.status = 'normal'; s.rescued = false;
+          this.push(s.code, 0.12, 15);
+          this._announce('relief', s.code, `✅ ${s.name}, 상장폐지 심사 통과! 관리종목 해제`);
+        }
+      } else if (ratio < 0.5) {
+        s.status = 'warning'; s.warnAt = 0; // 다음 라운드 종료 때 심사
+        this._announce('warn', s.code, `🚨 ${s.name}, 주가 급락으로 관리종목 지정. 다음 라운드 종료 후 상장폐지 심사`);
+      }
+    }
+  }
+
+  _delist(s) {
+    s.status = 'delisted';
+    for (const o of [...this.orders.values()]) if (o.sym === s.code) this._cancel(o);
+    s.bids = []; s.asks = []; s.drifts = [];
+    for (const p of this.players.values()) {
+      const ps = p.positions[s.code];
+      if (!ps || !ps.qty) continue;
+      const cost = ps.qty * ps.avgCost;
+      const refund = Math.round(cost * p.mods.delistIns);
+      if (refund > 0) this.addCash(p, refund);
+      p.realized += refund - cost;
+      p.history.unshift({ sym: s.code, side: 'delist', price: 0, qty: ps.qty, fee: 0, pnl: Math.round(refund - cost), ts: Date.now() });
+      this.events.push({ playerId: p.id, msg: { kind: 'buff', text: `💀 ${s.name} 상장폐지! 보유 ${ps.qty.toLocaleString('ko-KR')}주가 휴지조각이 됐습니다${refund > 0 ? ` (보험금 ${refund.toLocaleString('ko-KR')}원)` : ''}` } });
+      delete p.positions[s.code];
+      this.dirty.add(p.id);
+    }
+    this._announce('delist', s.code, `💀 ${s.name} 상장폐지 확정! 보유 주식은 0원이 됩니다`);
+  }
+
+  // 라운드 시작: 상장폐지된 자리에 신규 상장. 바뀌었으면 true
+  roundStart() {
+    let changed = false;
+    for (const s of [...this.symbols.values()]) {
+      if (s.status !== 'delisted') continue;
+      this.symbols.delete(s.code);
+      const def = this.ipoPool.find((d) => !this.symbols.has(d.code));
+      if (def) {
+        this.ipoPool = this.ipoPool.filter((d) => d !== def);
+        const n = this._list(def, true);
+        n.trendAt = this.trend;
+        this._announce('ipo', n.code, `🎉 ${n.name}(${n.sector}) 신규 상장! 첫날은 변동성이 큽니다`);
+      }
+      changed = true;
+    }
+    if (changed) this.broadcasts.push({ t: 'symbols', symbols: this.symbolList(), md: this.marketData() });
+    return changed;
   }
 
   // ---------- 시세 ----------
@@ -505,7 +671,7 @@ class Market {
 
   quote(s) {
     return {
-      code: s.code, name: s.name, sector: s.sector, last: s.last, ref: s.ref,
+      code: s.code, name: s.name, sector: s.sector, last: s.last, ref: s.ref, status: s.status, isNew: s.isNew,
       high: s.high, low: s.low, volume: s.volume, value: s.value, tick: tickSize(s.last),
       upper: floorTick(s.ref * (1 + LIMIT)), lower: ceilTick(s.ref * (1 - LIMIT)),
       c5: s.c5[s.c5.length - 1] || null, c60: s.c60[s.c60.length - 1] || null,
@@ -526,7 +692,7 @@ class Market {
   }
 
   symbolList() {
-    return [...this.symbols.values()].map((s) => ({ code: s.code, name: s.name, sector: s.sector, game: s.game }));
+    return [...this.symbols.values()].map((s) => ({ code: s.code, name: s.name, sector: s.sector, game: s.game, status: s.status }));
   }
 }
 

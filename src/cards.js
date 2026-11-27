@@ -100,6 +100,44 @@ const CARDS = [
       return win ? `🎲 도박 성공! 현금 +${pctS(up)}` : `🎲 도박 실패… 현금 -${pctS(down)}`;
     },
   },
+  {
+    id: 'inverse', name: '인버스 베팅', icon: '🐻', type: '1라운드', v: [100_000, 200_000, 350_000, 600_000],
+    desc: (v) => `다음 라운드 동안 시장지수가 1% 떨어질 때마다 현금 ${won(v)}을 받습니다. 올라도 손해는 없어요. (불황 대비)`,
+    apply: (m, p, v) => { p.mods.bets.push({ type: 'down', per: v }); },
+  },
+  {
+    id: 'bull', name: '불장 베팅', icon: '🐂', type: '1라운드', v: [80_000, 160_000, 280_000, 500_000],
+    desc: (v) => `다음 라운드 동안 시장지수가 1% 오를 때마다 현금 ${won(v)}을 받습니다. 떨어져도 손해는 없어요.`,
+    apply: (m, p, v) => { p.mods.bets.push({ type: 'up', per: v }); },
+  },
+  {
+    id: 'delistins', name: '상장폐지 보험', icon: '🧯', type: '영구', v: [0.5, 0.7, 0.9, 1.2],
+    desc: (v) => `보유 종목이 상장폐지되면 매입금액의 ${pctS(v)}를 보험금으로 받습니다. 관리종목 줍줍이 가능해져요.`,
+    apply: (m, p, v) => { p.mods.delistIns = Math.max(p.mods.delistIns, v); },
+  },
+  {
+    id: 'loan', name: '마진 대출', icon: '🏧', type: '즉시', v: [3_000_000, 6_000_000, 10_000_000, 15_000_000],
+    desc: (v) => `즉시 현금 ${won(v)}을 빌립니다. 갚을 돈은 ${won(v * 1.1)}이고 총자산에서 계속 빠집니다. 수익률 10%를 넘겨야 이득!`,
+    apply: (m, p, v) => { m.addCash(p, v); p.mods.debt += Math.round(v * 1.1); },
+  },
+  {
+    id: 'analyst', name: '차트 분석가', icon: '🔭', type: '라운드', v: [1, 2, 3, 5],
+    desc: (v) => `다음 ${v}라운드 동안 모든 종목의 '적정가'(주가가 끌려가는 진짜 가치)가 차트에 보라색 선으로 표시됩니다.`,
+    apply: (m, p, v) => { p.mods.analyst += v; },
+  },
+  {
+    id: 'robin', name: '로빈후드', icon: '🏹', type: '즉시', v: [0.04, 0.07, 0.1, 0.15], multi: true,
+    desc: (v) => `나를 뺀 1위 플레이어의 주문가능 현금 ${pctS(v)}를 빼앗아 옵니다.`,
+    apply: (m, p, v) => {
+      const target = m.standings().find((r) => r.id !== p.id);
+      const t = target && m.players.get(target.id);
+      if (!t) return '🏹 빼앗을 상대가 없습니다';
+      const amt = Math.round((t.cash - t.reservedCash) * v);
+      m.addCash(t, -amt); m.addCash(p, amt);
+      m.events.push({ playerId: t.id, msg: { kind: 'buff', text: `🏹 ${p.name}님의 로빈후드! 현금 ${won(amt)}을 빼앗겼습니다` } });
+      return `🏹 ${t.name}님에게서 ${won(amt)}을 빼앗았습니다`;
+    },
+  },
 ];
 const BY_ID = Object.fromEntries(CARDS.map((c) => [c.id, c]));
 
@@ -114,11 +152,13 @@ function rollRarity(luck) {
 function drawOptions(market, p, n = 3, info = {}) {
   const out = [];
   const used = new Set();
-  const syms = [...market.symbols.values()];
+  const syms = market.listed();
   while (out.length < n) {
     const rarity = rollRarity(p.mods.luck);
     const pool = CARDS.filter((c) => !used.has(c.id) && rarity >= (c.minRarity || 0) && !(c.id === 'nofee' && p.mods.feeFree)
-      && !(c.id === 'gamer' && (!info.mgLeft || p.mods.gameMult >= GAME_MULT_CAP)));
+      && !(c.id === 'gamer' && (!info.mgLeft || p.mods.gameMult >= GAME_MULT_CAP))
+      && !(c.multi && market.players.size < 2)
+      && !(c.id === 'delistins' && p.mods.delistIns >= 1.2));
     if (!pool.length) break;
     const card = pool[Math.floor(Math.random() * pool.length)];
     used.add(card.id);
