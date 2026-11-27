@@ -76,7 +76,22 @@ test/              엔진 불변식 테스트 + 방 전체 진행 테스트 (npm
 
 ## 배포
 
-WebSocket을 지원하는 Node 호스팅(Render, Railway, Fly.io, VPS 등)이면 됩니다.
+### Render (추천)
+
+1. [Render](https://render.com)에 GitHub 계정으로 로그인합니다.
+2. **New → Blueprint**를 누르고 이 저장소를 선택합니다. `render.yaml`이 자동으로 읽힙니다.
+3. 배포가 끝나면 `https://jusik-xxxx.onrender.com` 같은 주소가 생깁니다. 그 주소를 친구들에게 공유하면 됩니다.
+
+직접 설정하려면 **New → Web Service**를 고르고 아래처럼 입력합니다.
+- Build Command: `npm ci`
+- Start Command: `npm start`
+- Health Check Path: `/healthz`
+
+무료 플랜에서는 15분 동안 접속이 없으면 서버가 잠듭니다. 잠든 뒤 첫 접속은 깨어나는 데 1분 가까이 걸립니다. 서버가 잠들거나 재배포되면 열려 있던 방도 사라집니다.
+
+### 그 외
+
+WebSocket을 지원하는 Node 호스팅(Railway, Fly.io, VPS 등)이면 됩니다.
 
 ```bash
 docker build -t jusik .
