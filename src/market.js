@@ -1,21 +1,20 @@
 'use strict';
-// 시장 엔진: 종목별 호가창(가격-시간 우선 매칭), 계좌 정산, 시장조성/노이즈 봇, 뉴스 이벤트
-const crypto = require('crypto');
-
-const FEE = 0.00015;   // 매매 수수료 0.015% (매수/매도 공통)
-const TAX = 0.0018;    // 매도 시 거래세 0.18%
+// 시장 엔진 (방마다 하나): 호가창 매칭, 계좌 정산, 카드 효과(손익 배율 등), 봇, 뉴스
+const FEE = 0.00015;   // 매매 수수료 0.015%
+const TAX = 0.0018;    // 매도 거래세 0.18%
 const START_CASH = 10_000_000;
 const MAX_QTY = 1_000_000;
 const BOOK_DEPTH = 10;
-const C5 = 5, C60 = 60;              // 캔들 간격(초)
-const MAX_C5 = 4000, MAX_C60 = 3000; // 보관할 캔들 수
-const KST = 9 * 3600 * 1000;
+const C5 = 5, C60 = 60;
+const MAX_C5 = 4000, MAX_C60 = 3000;
+const LIMIT = 0.3;            // 라운드(하루) 가격제한폭
+const INSIDER_LEAD = 15_000;  // 내부자 정보: 뉴스 몇 ms 전에 알려주나
 
 const SYMBOLS = [
-  { code: 'GRM', name: '구름전자', price: 72000, vol: 0.0011, sector: '반도체' },
-  { code: 'BNN', name: '바나나모빌리티', price: 18500, vol: 0.0018, sector: '자동차' },
-  { code: 'DKB', name: '도깨비바이오', price: 4200, vol: 0.0032, sector: '바이오' },
-  { code: 'DLB', name: '달빛엔터', price: 31000, vol: 0.0015, sector: '엔터' },
+  { code: 'GRM', name: '구름전자', price: 72000, vol: 0.0011, sector: '반도체', game: 'chip' },
+  { code: 'BNN', name: '바나나모빌리티', price: 18500, vol: 0.0018, sector: '자동차', game: 'parking' },
+  { code: 'DKB', name: '도깨비바이오', price: 4200, vol: 0.0030, sector: '바이오', game: 'math' },
+  { code: 'DLB', name: '달빛엔터', price: 31000, vol: 0.0015, sector: '엔터', game: 'reaction' },
 ];
 
 const NEWS_UP = [
@@ -32,12 +31,6 @@ const NEWS_DOWN = [
   '{n}, 주력 제품 리콜 사태',
   '{n}, 경쟁사 신제품 출시로 점유율 하락 우려',
 ];
-const NEWS_SECTOR = {
-  '바이오': ['{n}, 임상 3상 결과 발표 임박', '{n}, 신약 FDA 심사 일정 확정'],
-  '반도체': ['{n}, 차세대 칩 양산 일정 공개'],
-  '자동차': ['{n}, 자율주행 규제 관련 정부 발표 예정'],
-  '엔터': ['{n}, 소속 아티스트 월드투어 발표'],
-};
 
 function tickSize(p) {
   if (p < 2000) return 1;
@@ -50,6 +43,7 @@ function tickSize(p) {
 }
 const floorTick = (p) => { const t = tickSize(p); return Math.max(t, Math.floor(p / t) * t); };
 const ceilTick = (p) => { const t = tickSize(p); return Math.ceil(p / t) * t; };
+const roundTick = (p) => { const t = tickSize(p); return Math.max(t, Math.round(p / t) * t); };
 const isOnTick = (p) => p % tickSize(p) === 0;
 const gauss = () => {
   let u = 0, v = 0;
@@ -58,75 +52,88 @@ const gauss = () => {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 };
 const rand = (a, b) => a + Math.random() * (b - a);
-const kstDay = (ms) => Math.floor((ms + KST) / 86400000);
 
 class MarketError extends Error {}
 
+function defaultMods() {
+  return {
+    leverage: 1,       // 손익 배율 (영구)
+    lossMult: 1,       // 손실 감소 배율 (영구)
+    feeFree: false,    // 수수료·세금 면제
+    scalpUntil: 0,     // 단타의 신 종료 시각
+    scalpSave: 0,      // 손실 무효화 확률
+    scalpBonus: 0,     // 수익 보너스
+    insider: 0,        // 남은 내부자 정보 횟수
+    interest: 0,       // 라운드 종료 시 현금 이자율
+    dividend: 0,       // 라운드 종료 시 보유주식 배당률
+    luck: 0,           // 카드 등급 운
+    rerolls: 0,        // 다시 뽑기권
+    gameMult: 1,       // 미니게임 보상 배율
+  };
+}
+
 class Market {
   constructor() {
-    this.players = new Map();   // id -> player
-    this.byName = new Map();    // lower(name) -> id
-    this.byToken = new Map();   // token -> id
-    this.orders = new Map();    // id -> order (활성 주문만)
+    this.players = new Map();
+    this.orders = new Map();
     this.symbols = new Map();
     this.news = [];
-    this.chat = [];
-    this.pendingTrades = [];    // 다음 브로드캐스트로 보낼 체결
-    this.dirty = new Set();     // 계좌가 바뀐 플레이어
-    this.events = [];           // 개인 알림 {playerId, msg}
+    this.pendingTrades = [];
+    this.dirty = new Set();
+    this.events = [];          // { playerId, msg }
+    this.broadcasts = [];      // 방 전체 알림 { t, ... }
+    this.checkCash = new Set();
     this.seq = 1;
-    this.nextNewsAt = Date.now() + rand(40, 90) * 1000;
-    for (const s of SYMBOLS) this.symbols.set(s.code, this._newSymbol(s));
-  }
-
-  _newSymbol(s) {
-    return {
-      code: s.code, name: s.name, sector: s.sector, vol: s.vol,
-      fair: s.price, anchor: s.price, last: s.price, ref: s.price, refDay: kstDay(Date.now()),
-      high: s.price, low: s.price, volume: 0, value: 0,
-      bids: [], asks: [], c5: [], c60: [], drift: null,
-    };
+    this.paused = true;
+    this.upcoming = null;      // 다음 뉴스
+    for (const s of SYMBOLS) {
+      // 게임마다 시작가를 조금씩 다르게
+      const price = roundTick(s.price * rand(0.75, 1.3));
+      this.symbols.set(s.code, {
+        code: s.code, name: s.name, sector: s.sector, game: s.game, vol: s.vol,
+        fair: price, anchor: price, last: price, ref: price, open: price,
+        high: price, low: price, volume: 0, value: 0,
+        bids: [], asks: [], c5: [], c60: [], drifts: [],
+      });
+    }
+    this._scheduleNews(Date.now());
   }
 
   // ---------- 플레이어 ----------
-  join(name, token) {
-    if (token && this.byToken.has(token)) {
-      return this.players.get(this.byToken.get(token));
-    }
-    name = String(name || '').trim();
-    if (!/^[\p{L}\p{N}_\- ]{2,12}$/u.test(name)) throw new MarketError('닉네임은 2~12자의 글자/숫자만 가능합니다.');
-    if (this.byName.has(name.toLowerCase())) throw new MarketError('이미 사용 중인 닉네임입니다.');
-    const p = {
-      id: crypto.randomUUID(), token: crypto.randomUUID(), name,
-      cash: START_CASH, reservedCash: 0, positions: {}, realized: 0,
-      history: [], createdAt: Date.now(), resets: 0,
-    };
-    this._index(p);
-    this.dirty.add(p.id);
+  addPlayer(id, name) {
+    const p = { id, name, cash: START_CASH, reservedCash: 0, positions: {}, realized: 0, history: [], mods: defaultMods(), cards: [] };
+    this.players.set(id, p);
+    this.dirty.add(id);
     return p;
-  }
-
-  _index(p) {
-    this.players.set(p.id, p);
-    this.byName.set(p.name.toLowerCase(), p.id);
-    this.byToken.set(p.token, p.id);
-  }
-
-  resetPlayer(p) {
-    for (const o of [...this.orders.values()]) if (o.owner === p.id) this._cancel(o);
-    p.cash = START_CASH; p.reservedCash = 0; p.positions = {}; p.realized = 0; p.history = [];
-    p.resets = (p.resets || 0) + 1;
-    this.dirty.add(p.id);
   }
 
   pos(p, sym) {
     return p.positions[sym] || (p.positions[sym] = { qty: 0, reserved: 0, avgCost: 0 });
   }
 
+  // 카드 효과를 반영한 손익 (realize=true면 단타 효과까지 굴림)
+  adjustPnl(p, pnl, realize) {
+    const m = p.mods;
+    let v = pnl * m.leverage;
+    if (v < 0) v *= m.lossMult;
+    if (realize && m.scalpUntil > Date.now()) {
+      if (v < 0 && Math.random() < m.scalpSave) {
+        this.events.push({ playerId: p.id, msg: { kind: 'buff', text: `⚡ 단타의 신! 손실 ${Math.round(-v).toLocaleString('ko-KR')}원 무효화` } });
+        v = 0;
+      } else if (v > 0) v *= 1 + m.scalpBonus;
+    }
+    return v;
+  }
+
   equity(p) {
     let v = p.cash;
-    for (const [sym, ps] of Object.entries(p.positions)) v += ps.qty * this.symbols.get(sym).last;
-    return v;
+    for (const [sym, ps] of Object.entries(p.positions)) {
+      if (!ps.qty) continue;
+      const val = ps.qty * this.symbols.get(sym).last;
+      const base = val - ps.qty * ps.avgCost;
+      v += val + (this.adjustPnl(p, base, false) - base);
+    }
+    return Math.max(0, v);
   }
 
   account(p) {
@@ -138,22 +145,50 @@ class Market {
     return {
       id: p.id, name: p.name, cash: p.cash, reservedCash: p.reservedCash,
       positions, realized: Math.round(p.realized), orders, history: p.history.slice(0, 50),
-      equity: Math.round(this.equity(p)), startCash: START_CASH,
+      equity: Math.round(this.equity(p)), startCash: START_CASH, mods: p.mods, cards: p.cards,
     };
   }
 
-  leaderboard(n = 20) {
+  standings() {
     const rows = [];
     for (const p of this.players.values()) {
       const eq = this.equity(p);
-      rows.push({ name: p.name, equity: Math.round(eq), ret: (eq / START_CASH - 1) * 100 });
+      rows.push({ id: p.id, name: p.name, equity: Math.round(eq), ret: (eq / START_CASH - 1) * 100, leverage: p.mods.leverage, cards: p.cards.length });
     }
     rows.sort((a, b) => b.equity - a.equity);
-    return { top: rows.slice(0, n), total: rows.length };
+    return rows;
+  }
+
+  // ---------- 카드/이벤트용 조작 ----------
+  grantShares(p, sym, qty, price) {
+    if (qty <= 0) return;
+    const ps = this.pos(p, sym);
+    ps.avgCost = (ps.avgCost * ps.qty + price * qty) / (ps.qty + qty);
+    ps.qty += qty;
+    this.dirty.add(p.id);
+  }
+
+  addCash(p, amount) {
+    p.cash = Math.max(p.reservedCash, Math.round(p.cash + amount));
+    this.dirty.add(p.id);
+  }
+
+  // 종목 내재가치를 secs초 동안 pct만큼 이동 (작전/루머 카드)
+  push(sym, pct, secs) {
+    const s = this.symbols.get(sym);
+    s.drifts.push({ perSec: Math.log(1 + pct) / secs, left: secs });
+  }
+
+  // 새 라운드 = 새 거래일: 기준가 갱신
+  newDay() {
+    for (const s of this.symbols.values()) {
+      s.ref = s.last; s.open = s.last; s.high = s.low = s.last; s.volume = 0; s.value = 0;
+    }
   }
 
   // ---------- 주문 ----------
   placeOrder(p, { sym, side, type, price, qty }) {
+    if (this.paused) throw new MarketError('지금은 거래 시간이 아닙니다.');
     const s = this.symbols.get(sym);
     if (!s) throw new MarketError('없는 종목입니다.');
     if (side !== 'buy' && side !== 'sell') throw new MarketError('잘못된 주문 방향');
@@ -161,34 +196,31 @@ class Market {
     qty = Number(qty);
     if (!Number.isInteger(qty) || qty <= 0 || qty > MAX_QTY) throw new MarketError('수량은 1 이상의 정수여야 합니다.');
 
-    const o = {
-      id: this.seq++, owner: p.id, sym, side, type, qty, filled: 0, reserved: 0,
-      price: null, ts: Date.now(), bot: false,
-    };
+    const fee = p.mods.feeFree ? 0 : FEE;
+    const o = { id: this.seq++, owner: p.id, sym, side, type, qty, filled: 0, reserved: 0, price: null, ts: Date.now(), bot: false, feeRate: fee };
 
     if (type === 'limit') {
       price = Number(price);
       if (!Number.isInteger(price) || price <= 0) throw new MarketError('가격이 올바르지 않습니다.');
       if (!isOnTick(price)) throw new MarketError(`호가 단위(${tickSize(price)}원)에 맞지 않는 가격입니다.`);
-      if (price > s.ref * 1.3 || price < s.ref * 0.7) throw new MarketError('가격제한폭(기준가 ±30%)을 벗어났습니다.');
+      if (price > s.ref * (1 + LIMIT) || price < s.ref * (1 - LIMIT)) throw new MarketError('가격제한폭(기준가 ±30%)을 벗어났습니다.');
       o.price = price;
     }
 
     if (side === 'buy') {
       const avail = p.cash - p.reservedCash;
       if (type === 'limit') {
-        const need = Math.ceil(o.price * qty * (1 + FEE));
+        const need = Math.ceil(o.price * qty * (1 + fee));
         if (need > avail) throw new MarketError('주문 가능 금액이 부족합니다.');
         o.reserved = need; p.reservedCash += need;
       } else {
-        // 시장가 매수: 호가를 미리 훑어 살 수 있는 수량으로 제한
         let left = avail, can = 0;
         for (const a of s.asks) {
           if (a.owner === p.id) continue;
           const rem = a.qty - a.filled;
-          const unit = a.price * (1 + FEE);
+          const unit = a.price * (1 + fee);
           const k = Math.min(rem, Math.floor(left / unit), qty - can);
-          can += k; left -= k * unit + 1; // +1: 체결별 수수료 반올림 여유
+          can += k; left -= k * unit + 1;
           if (can >= qty || k < rem) break;
         }
         if (can <= 0) throw new MarketError(s.asks.length ? '주문 가능 금액이 부족합니다.' : '매도 호가가 없습니다.');
@@ -211,6 +243,10 @@ class Market {
     this._cancel(o);
   }
 
+  cancelAll(p, sym) {
+    for (const o of [...this.orders.values()]) if (o.owner === p.id && (!sym || o.sym === sym)) this._cancel(o);
+  }
+
   _pubOrder(o) {
     return { id: o.id, sym: o.sym, side: o.side, type: o.type, price: o.price, qty: o.qty, filled: o.filled, ts: o.ts };
   }
@@ -221,7 +257,7 @@ class Market {
     while (o.filled < o.qty && opp.length) {
       const best = opp[0];
       if (o.type === 'limit' && (o.side === 'buy' ? best.price > o.price : best.price < o.price)) break;
-      if (!o.bot && best.owner === o.owner) { this._cancel(best); continue; } // 자전거래 방지: 기존 주문 취소
+      if (!o.bot && best.owner === o.owner) { this._cancel(best); continue; }
       const q = Math.min(o.qty - o.filled, best.qty - best.filled);
       if (o.side === 'buy') this._execute(o, best, best.price, q, 'buy');
       else this._execute(best, o, best.price, q, 'sell');
@@ -232,6 +268,23 @@ class Market {
       this.orders.set(o.id, o);
     } else {
       this._finish(o);
+    }
+    this._settleCash();
+  }
+
+  // 레버리지 손실로 현금이 예약금보다 작아지면: 매수 주문 취소, 그래도 음수면 0으로 (깡통 보호)
+  _settleCash() {
+    if (!this.checkCash.size) return;
+    const ids = [...this.checkCash];
+    this.checkCash.clear();
+    for (const id of ids) {
+      const p = this.players.get(id);
+      if (!p || p.cash >= p.reservedCash) continue;
+      for (const o of [...this.orders.values()]) if (o.owner === id && o.side === 'buy') this._cancel(o);
+      if (p.cash < 0) {
+        this.events.push({ playerId: id, msg: { kind: 'buff', text: '💀 레버리지 손실로 현금이 바닥났습니다! (깡통)' } });
+        p.cash = 0;
+      }
     }
   }
 
@@ -255,14 +308,13 @@ class Market {
     this._finish(o, true);
   }
 
-  // 주문 종료: 남은 예약금/예약수량 해제
   _finish(o, canceled = false) {
     this.orders.delete(o.id);
     if (o.bot) return;
     const p = this.players.get(o.owner);
     if (!p) return;
     if (o.side === 'buy') { p.reservedCash -= o.reserved; o.reserved = 0; }
-    else { this.pos(p, o.sym).reserved -= (o.qty - o.filled); }
+    else this.pos(p, o.sym).reserved -= (o.qty - o.filled);
     if (canceled && o.filled < o.qty) {
       this.events.push({ playerId: p.id, msg: { kind: 'cancel', id: o.id, sym: o.sym, side: o.side, left: o.qty - o.filled } });
     }
@@ -277,9 +329,9 @@ class Market {
 
     if (!buy.bot) {
       const p = this.players.get(buy.owner);
-      const fee = Math.round(notional * FEE);
+      const fee = p.mods.feeFree ? 0 : Math.round(notional * FEE);
       if (buy.reserved > 0) {
-        const rel = Math.min(buy.reserved, Math.ceil(buy.price * q * (1 + FEE)));
+        const rel = Math.min(buy.reserved, Math.ceil(buy.price * q * (1 + buy.feeRate)));
         buy.reserved -= rel; p.reservedCash -= rel;
       }
       p.cash -= notional + fee;
@@ -290,25 +342,24 @@ class Market {
     }
     if (!sell.bot) {
       const p = this.players.get(sell.owner);
-      const fee = Math.round(notional * FEE);
-      const tax = Math.round(notional * TAX);
+      const fee = p.mods.feeFree ? 0 : Math.round(notional * FEE) + Math.round(notional * TAX);
       const ps = this.pos(p, sell.sym);
+      const base = notional - fee - ps.avgCost * q;
+      const pnl = this.adjustPnl(p, base, true);
       ps.qty -= q; ps.reserved -= q;
-      p.cash += notional - fee - tax;
-      const pnl = notional - fee - tax - ps.avgCost * q;
+      p.cash += notional - fee + (pnl - base);
       p.realized += pnl;
       if (ps.qty === 0) ps.avgCost = 0;
-      this._record(p, { sym: sell.sym, side: 'sell', price, qty: q, fee: fee + tax, pnl: Math.round(pnl), ts: now });
+      if (p.cash < p.reservedCash) this.checkCash.add(p.id);
+      this._record(p, { sym: sell.sym, side: 'sell', price, qty: q, fee, pnl: Math.round(pnl), ts: now });
     }
 
-    // 시세 갱신
     s.last = price;
     s.high = Math.max(s.high, price); s.low = Math.min(s.low, price);
     s.volume += q; s.value += notional;
-    // 체결가가 내재가치를 끌어당김 → 대량 매수/매도가 실제로 가격을 움직임
     s.fair += 0.35 * (price - s.fair);
     this._candle(s, price, q, now);
-    this.pendingTrades.push({ sym: s.code, price, qty: q, side: aggressor, ts: now, player: !(buy.bot && sell.bot) });
+    this.pendingTrades.push({ sym: s.code, price, qty: q, side: aggressor, ts: now });
     if (this.pendingTrades.length > 500) this.pendingTrades.splice(0, this.pendingTrades.length - 500);
   }
 
@@ -336,35 +387,33 @@ class Market {
     }
   }
 
-  // ---------- 봇 & 시뮬레이션 (1초마다) ----------
+  // ---------- 시뮬레이션 (거래 중 1초마다) ----------
   step() {
+    if (this.paused) return;
     const now = Date.now();
-    const day = kstDay(now);
-    if (now >= this.nextNewsAt) this._news(now);
-
+    this._newsTick(now);
     for (const s of this.symbols.values()) {
-      if (s.refDay !== day) { // 날짜 변경: 전일 종가를 기준가로
-        s.ref = s.last; s.refDay = day; s.high = s.low = s.last; s.volume = 0; s.value = 0;
-      }
-      // 내재가치 랜덤워크 + 뉴스 드리프트 + 약한 평균회귀
       let mu = 0.000002 * Math.log(s.anchor / s.fair);
-      if (s.drift) { mu += s.drift.perSec; if (--s.drift.left <= 0) s.drift = null; }
+      for (const d of s.drifts) { mu += d.perSec; d.left--; }
+      s.drifts = s.drifts.filter((d) => d.left > 0);
       s.fair *= Math.exp(mu + s.vol * gauss());
-      s.fair = Math.min(Math.max(s.fair, s.ref * 0.71, 50), s.ref * 1.29);
-
+      s.fair = Math.min(Math.max(s.fair, s.ref * (1 - LIMIT + 0.01), 50), s.ref * (1 + LIMIT - 0.01));
       this._marketMake(s);
       this._noise(s);
-      this._candle(s, s.last, 0, now); // 거래 없어도 캔들 생성
+      this._candle(s, s.last, 0, now);
     }
   }
 
+  // 일시정지 동안 뉴스 시계도 멈추도록 밀어줌
+  shiftClock(ms) {
+    if (this.upcoming) { this.upcoming.at += ms; this.upcoming.revealAt += ms; }
+  }
+
   _botOrder(s, side, type, price, qty) {
-    const o = { id: this.seq++, owner: 'bot', sym: s.code, side, type, price, qty, filled: 0, reserved: 0, ts: Date.now(), bot: true };
-    this._process(o);
+    this._process({ id: this.seq++, owner: 'bot', sym: s.code, side, type, price, qty, filled: 0, reserved: 0, ts: Date.now(), bot: true });
   }
 
   _marketMake(s) {
-    // 기존 봇 호가 철회
     for (const arr of [s.bids, s.asks]) {
       for (let i = arr.length - 1; i >= 0; i--) if (arr[i].bot) { this.orders.delete(arr[i].id); arr.splice(i, 1); }
     }
@@ -372,7 +421,7 @@ class Market {
     const half = Math.max(t, s.fair * 0.0006);
     const step = Math.max(t, s.fair * 0.0008);
     const baseQty = 2_500_000 / s.fair;
-    const hiLim = floorTick(s.ref * 1.3), loLim = ceilTick(s.ref * 0.7);
+    const hiLim = floorTick(s.ref * (1 + LIMIT)), loLim = ceilTick(s.ref * (1 - LIMIT));
     let lastBid = Infinity, lastAsk = 0;
     for (let i = 0; i < 12; i++) {
       let bp = floorTick(s.fair - half - i * step);
@@ -396,26 +445,44 @@ class Market {
     }
   }
 
-  _news(now) {
-    this.nextNewsAt = now + rand(60, 150) * 1000;
+  // ---------- 뉴스 (내부자 카드 보유자는 미리 받음) ----------
+  _scheduleNews(now) {
     const syms = [...this.symbols.values()];
     const s = syms[Math.floor(Math.random() * syms.length)];
-    let good = Math.random() < 0.5;
-    let pool = good ? NEWS_UP : NEWS_DOWN;
-    let mag = rand(0.03, 0.12);
-    // 가끔 방향이 애매한 '루머' 뉴스
-    if (Math.random() < 0.2 && NEWS_SECTOR[s.sector]) { pool = NEWS_SECTOR[s.sector]; mag *= 1.4; }
-    const title = pool[Math.floor(Math.random() * pool.length)].replace('{n}', s.name);
-    const secs = Math.round(rand(8, 30));
-    const lr = Math.log(1 + (good ? mag : -mag));
-    s.drift = { perSec: lr / secs, left: secs };
-    const item = { id: this.seq++, sym: s.code, title, ts: now };
-    this.news.unshift(item);
-    if (this.news.length > 30) this.news.length = 30;
-    return item;
+    const good = Math.random() < 0.5;
+    const pool = good ? NEWS_UP : NEWS_DOWN;
+    const at = now + rand(22, 40) * 1000;
+    this.upcoming = {
+      sym: s.code, good, mag: rand(0.03, 0.12), secs: Math.round(rand(8, 25)),
+      title: pool[Math.floor(Math.random() * pool.length)].replace('{n}', s.name),
+      at, revealAt: at - INSIDER_LEAD, revealed: false,
+    };
   }
 
-  // ---------- 시세 스냅샷 ----------
+  _newsTick(now) {
+    const u = this.upcoming;
+    if (!u) return;
+    if (!u.revealed && now >= u.revealAt) {
+      u.revealed = true;
+      for (const p of this.players.values()) {
+        if (p.mods.insider > 0) {
+          p.mods.insider--;
+          this.dirty.add(p.id);
+          this.events.push({ playerId: p.id, msg: { kind: 'insider', sym: u.sym, title: u.title, good: u.good, inSec: Math.round((u.at - now) / 1000) } });
+        }
+      }
+    }
+    if (now >= u.at) {
+      this.push(u.sym, u.good ? u.mag : -u.mag, u.secs);
+      const item = { id: this.seq++, sym: u.sym, title: u.title, ts: now };
+      this.news.unshift(item);
+      if (this.news.length > 30) this.news.length = 30;
+      this.broadcasts.push({ t: 'news', item });
+      this._scheduleNews(now);
+    }
+  }
+
+  // ---------- 시세 ----------
   book(s) {
     const agg = (arr) => {
       const out = [];
@@ -434,7 +501,7 @@ class Market {
     return {
       code: s.code, name: s.name, sector: s.sector, last: s.last, ref: s.ref,
       high: s.high, low: s.low, volume: s.volume, value: s.value, tick: tickSize(s.last),
-      upper: floorTick(s.ref * 1.3), lower: ceilTick(s.ref * 0.7),
+      upper: floorTick(s.ref * (1 + LIMIT)), lower: ceilTick(s.ref * (1 - LIMIT)),
       c5: s.c5[s.c5.length - 1] || null, c60: s.c60[s.c60.length - 1] || null,
       ...this.book(s),
     };
@@ -452,34 +519,9 @@ class Market {
     return tf === 5 ? s.c5 : s.c60;
   }
 
-  // ---------- 저장/복원 ----------
-  serialize() {
-    const symbols = {};
-    for (const s of this.symbols.values()) {
-      const { bids, asks, ...rest } = s;
-      symbols[s.code] = rest;
-    }
-    const orders = [...this.orders.values()].filter((o) => !o.bot);
-    return { v: 1, seq: this.seq, players: [...this.players.values()], orders, symbols, news: this.news, chat: this.chat };
-  }
-
-  restore(d) {
-    if (!d || d.v !== 1) return;
-    this.seq = d.seq || 1;
-    for (const p of d.players || []) this._index(p);
-    for (const [code, saved] of Object.entries(d.symbols || {})) {
-      const s = this.symbols.get(code);
-      if (s) Object.assign(s, saved, { bids: [], asks: [] });
-    }
-    for (const o of d.orders || []) {
-      const s = this.symbols.get(o.sym);
-      if (!s || !this.players.has(o.owner)) continue;
-      this._insert(s, o);
-      this.orders.set(o.id, o);
-    }
-    this.news = d.news || [];
-    this.chat = d.chat || [];
+  symbolList() {
+    return [...this.symbols.values()].map((s) => ({ code: s.code, name: s.name, sector: s.sector, game: s.game }));
   }
 }
 
-module.exports = { Market, MarketError, tickSize, FEE, TAX, START_CASH };
+module.exports = { Market, MarketError, tickSize, roundTick, FEE, TAX, START_CASH, SYMBOLS };

@@ -3,122 +3,152 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>주식 게임</title>
+  <title>주식 로그라이크</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/style.css" />
   <script src="/vendor/lightweight-charts.js"></script>
 </head>
 <body>
-  <header class="top">
-    <div class="brand">📈 주식 게임 <span class="online" id="online"></span></div>
-    <nav class="symbols" id="symbolTabs"></nav>
-    <div class="me" id="meBox"></div>
-  </header>
+  <!-- 로비: 방 목록 -->
+  <section class="screen" id="lobbyScreen">
+    <div class="lobby">
+      <h1>📈 주식 로그라이크</h1>
+      <p class="tagline">같은 차트, 다른 카드. 라운드마다 카드를 골라 빌드를 만들고<br />미니게임으로 주식을 따내 최후의 부자가 되세요.</p>
+      <label class="field">닉네임<input id="nameInput" maxlength="12" placeholder="2~12자" autocomplete="off" /></label>
+      <div class="lobby-actions">
+        <button class="primary" id="createBtn">방 만들기</button>
+        <div class="join-code"><input id="codeInput" maxlength="4" placeholder="방 코드" autocomplete="off" /><button id="joinBtn">입장</button></div>
+      </div>
+      <div class="msg" id="lobbyMsg"></div>
+      <h3>열린 방 <button class="ghost" id="refreshRooms">새로고침</button></h3>
+      <ul class="room-list" id="roomList"></ul>
+      <details class="howto">
+        <summary>게임 방법</summary>
+        <ul>
+          <li>모든 참가자는 <b>같은 시장</b>에서 거래합니다. 큰 주문은 모두의 차트를 움직입니다.</li>
+          <li>라운드(거래일)가 끝날 때마다 <b>카드 3장</b> 중 하나를 고릅니다. 등급: <span class="r-common">일반</span> · <span class="r-rare">희귀</span> · <span class="r-epic">영웅</span> · <span class="r-legendary">전설</span></li>
+          <li>3라운드마다 <b>기업 미니게임</b>이 열립니다. 순위대로 그 회사 주식을 받습니다.</li>
+          <li>라운드가 끝나면 미체결 주문은 취소되고, 다음 라운드의 기준가는 직전 종가가 됩니다 (±30% 제한).</li>
+          <li>마지막 라운드가 끝났을 때 <b>총자산</b>이 가장 많은 사람이 승리합니다.</li>
+        </ul>
+      </details>
+    </div>
+  </section>
 
-  <main class="layout">
-    <section class="panel chart-panel">
-      <div class="quote-head">
-        <div>
-          <span class="q-name" id="qName"></span>
-          <span class="q-code" id="qCode"></span>
+  <!-- 대기실 -->
+  <section class="screen hidden" id="waitScreen">
+    <div class="lobby">
+      <h1>방 <span class="code" id="waitCode"></span></h1>
+      <p class="muted">친구에게 방 코드나 링크를 보내세요. <button class="ghost" id="copyLink">링크 복사</button></p>
+      <ul class="wait-players" id="waitPlayers"></ul>
+      <div class="settings" id="settingsBox">
+        <label>라운드 수 <select id="setRounds"><option>6</option><option selected>10</option><option>15</option></select></label>
+        <label>라운드 시간 <select id="setSecs"><option value="30">30초</option><option value="45" selected>45초</option><option value="60">60초</option></select></label>
+      </div>
+      <div class="lobby-actions">
+        <button class="primary" id="startBtn">게임 시작</button>
+        <button id="leaveBtn">나가기</button>
+      </div>
+      <div class="msg" id="waitMsg"></div>
+      <div class="wait-chat"><div class="chat" id="waitChat"></div>
+        <form class="chat-form" data-chat><input maxlength="200" placeholder="메시지 입력" autocomplete="off" /><button>전송</button></form></div>
+    </div>
+  </section>
+
+  <!-- 게임 -->
+  <section class="screen hidden" id="gameScreen">
+    <header class="top">
+      <div class="round-box"><div class="round" id="roundLabel"></div><div class="phase" id="phaseLabel"></div></div>
+      <nav class="symbols" id="symbolTabs"></nav>
+      <div class="me" id="meBox"></div>
+    </header>
+    <div class="buffs" id="buffs"></div>
+
+    <main class="layout">
+      <section class="panel chart-panel">
+        <div class="quote-head">
+          <div><span class="q-name" id="qName"></span><span class="q-code" id="qCode"></span></div>
+          <div class="q-price" id="qPrice"></div>
+          <div class="q-stats" id="qStats"></div>
+          <div class="tf" id="tfBtns">
+            <button data-tf="5" class="on">5초</button><button data-tf="15">15초</button><button data-tf="60">1분</button>
+          </div>
         </div>
-        <div class="q-price" id="qPrice"></div>
-        <div class="q-stats" id="qStats"></div>
-        <div class="tf" id="tfBtns">
-          <button data-tf="5" class="on">5초</button>
-          <button data-tf="60">1분</button>
-          <button data-tf="300">5분</button>
-          <button data-tf="900">15분</button>
+        <div class="chart-wrap"><div id="chart" class="chart"></div><div class="paused hidden" id="pausedBadge">장 마감 · 다음 라운드 대기</div></div>
+      </section>
+
+      <section class="panel book-panel">
+        <h3>호가</h3>
+        <div class="book" id="book"></div>
+        <h3 class="sub">실시간 체결</h3>
+        <div class="tape" id="tape"></div>
+      </section>
+
+      <section class="panel order-panel">
+        <div class="side-tabs"><button data-side="buy" class="buy on">매수</button><button data-side="sell" class="sell">매도</button></div>
+        <div class="type-tabs">
+          <label><input type="radio" name="otype" value="limit" checked /> 지정가</label>
+          <label><input type="radio" name="otype" value="market" /> 시장가</label>
         </div>
-      </div>
-      <div id="chart" class="chart"></div>
-    </section>
+        <label class="field">가격<div class="stepper"><button type="button" id="pDown">−</button><input id="oPrice" inputmode="numeric" /><button type="button" id="pUp">+</button></div></label>
+        <label class="field">수량<div class="stepper"><button type="button" id="qDown">−</button><input id="oQty" inputmode="numeric" value="1" /><button type="button" id="qUp">+</button></div></label>
+        <div class="pct"><button data-pct="10">10%</button><button data-pct="25">25%</button><button data-pct="50">50%</button><button data-pct="100">최대</button></div>
+        <dl class="summary"><dt id="availLabel">주문가능</dt><dd id="avail">-</dd><dt>주문금액</dt><dd id="oTotal">-</dd></dl>
+        <button id="submit" class="submit buy">매수</button>
+        <div class="msg" id="orderMsg"></div>
+      </section>
 
-    <section class="panel book-panel">
-      <h3>호가</h3>
-      <div class="book" id="book"></div>
-      <h3 class="sub">실시간 체결</h3>
-      <div class="tape" id="tape"></div>
-    </section>
-
-    <section class="panel order-panel">
-      <div class="side-tabs">
-        <button data-side="buy" class="buy on">매수</button>
-        <button data-side="sell" class="sell">매도</button>
-      </div>
-      <div class="type-tabs">
-        <label><input type="radio" name="otype" value="limit" checked /> 지정가</label>
-        <label><input type="radio" name="otype" value="market" /> 시장가</label>
-      </div>
-      <label class="field">가격
-        <div class="stepper">
-          <button type="button" id="pDown">−</button>
-          <input id="oPrice" inputmode="numeric" />
-          <button type="button" id="pUp">+</button>
+      <section class="panel side-panel">
+        <div class="tabs">
+          <button data-tab="lb" class="on">순위</button><button data-tab="cards">내 카드</button><button data-tab="chat">채팅</button><button data-tab="news">뉴스</button>
         </div>
-      </label>
-      <label class="field">수량
-        <div class="stepper">
-          <button type="button" id="qDown">−</button>
-          <input id="oQty" inputmode="numeric" value="1" />
-          <button type="button" id="qUp">+</button>
+        <div class="tab-body" data-pane="lb"><ol class="lb" id="lb"></ol></div>
+        <div class="tab-body hidden" data-pane="cards"><ul class="my-cards" id="myCards"></ul></div>
+        <div class="tab-body hidden" data-pane="chat"><div class="chat" id="chat"></div>
+          <form class="chat-form" data-chat><input maxlength="200" placeholder="메시지 입력" autocomplete="off" /><button>전송</button></form></div>
+        <div class="tab-body hidden" data-pane="news"><ul class="news" id="news"></ul></div>
+      </section>
+
+      <section class="panel bottom-panel">
+        <div class="tabs">
+          <button data-tab="pos" class="on">보유종목</button><button data-tab="open">미체결 <span id="openCount"></span></button><button data-tab="hist">체결내역</button>
         </div>
-      </label>
-      <div class="pct">
-        <button data-pct="10">10%</button><button data-pct="25">25%</button>
-        <button data-pct="50">50%</button><button data-pct="100">최대</button>
-      </div>
-      <dl class="summary">
-        <dt id="availLabel">주문가능</dt><dd id="avail">-</dd>
-        <dt>주문금액</dt><dd id="oTotal">-</dd>
-      </dl>
-      <button id="submit" class="submit buy">매수</button>
-      <div class="msg" id="orderMsg"></div>
-    </section>
+        <div class="tab-body" data-pane="pos"><table class="grid" id="posTable"></table></div>
+        <div class="tab-body hidden" data-pane="open"><table class="grid" id="openTable"></table></div>
+        <div class="tab-body hidden" data-pane="hist"><table class="grid" id="histTable"></table></div>
+      </section>
+    </main>
+  </section>
 
-    <section class="panel side-panel">
-      <div class="tabs" data-group="side">
-        <button data-tab="lb" class="on">랭킹</button>
-        <button data-tab="chat">채팅</button>
-        <button data-tab="news">뉴스</button>
-      </div>
-      <div class="tab-body" data-pane="lb"><ol class="lb" id="lb"></ol></div>
-      <div class="tab-body hidden" data-pane="chat">
-        <div class="chat" id="chat"></div>
-        <form class="chat-form" id="chatForm"><input id="chatInput" maxlength="200" placeholder="메시지 입력" autocomplete="off" /><button>전송</button></form>
-      </div>
-      <div class="tab-body hidden" data-pane="news"><ul class="news" id="news"></ul></div>
-    </section>
+  <!-- 카드 선택 -->
+  <div class="overlay hidden" id="draftOverlay">
+    <div class="draft">
+      <h2>카드를 선택하세요 <span class="timer" id="draftTimer"></span></h2>
+      <p class="muted" id="draftSub"></p>
+      <div class="card-row" id="cardRow"></div>
+      <div class="draft-foot"><button id="rerollBtn">🔄 다시 뽑기 (<span id="rerollCount">0</span>)</button><span class="muted" id="draftWait"></span></div>
+    </div>
+  </div>
 
-    <section class="panel bottom-panel">
-      <div class="tabs" data-group="bottom">
-        <button data-tab="pos" class="on">보유종목</button>
-        <button data-tab="open">미체결 <span id="openCount"></span></button>
-        <button data-tab="hist">체결내역</button>
-        <span class="spacer"></span>
-        <button class="ghost" id="resetBtn" title="자산을 초기 상태로 되돌립니다">계좌 초기화</button>
-      </div>
-      <div class="tab-body" data-pane="pos"><table class="grid" id="posTable"></table></div>
-      <div class="tab-body hidden" data-pane="open"><table class="grid" id="openTable"></table></div>
-      <div class="tab-body hidden" data-pane="hist"><table class="grid" id="histTable"></table></div>
-    </section>
-  </main>
+  <!-- 미니게임 -->
+  <div class="overlay hidden" id="mgOverlay">
+    <div class="mg">
+      <div class="mg-head"><div><div class="mg-title" id="mgTitle"></div><div class="muted" id="mgSub"></div></div><div class="timer big" id="mgTimer"></div></div>
+      <div class="mg-stage" id="mgStage"></div>
+      <div class="mg-foot"><span>점수 <b id="mgScore">0</b></span><span class="muted" id="mgWait"></span></div>
+    </div>
+  </div>
+
+  <!-- 미니게임 결과 / 최종 결과 -->
+  <div class="overlay hidden" id="resultOverlay">
+    <div class="result" id="resultBox"></div>
+  </div>
 
   <div class="news-ticker" id="ticker"></div>
   <div class="toasts" id="toasts"></div>
 
-  <div class="overlay" id="login">
-    <form class="login-card" id="loginForm">
-      <h1>📈 주식 게임</h1>
-      <p>모든 참가자가 <b>같은 시장</b>에서 거래합니다.<br />당신의 주문이 차트를 움직입니다.</p>
-      <p class="muted">시작 자금 10,000,000원 · 수수료 0.015% · 매도세 0.18%</p>
-      <input id="nameInput" maxlength="12" placeholder="닉네임 (2~12자)" autocomplete="off" />
-      <button>입장하기</button>
-      <div class="msg" id="loginMsg"></div>
-    </form>
-  </div>
-
+  <script src="/minigames.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
